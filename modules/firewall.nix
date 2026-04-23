@@ -40,14 +40,14 @@
     "net.ipv4.tcp_syncookies" = 1;
     "net.ipv4.tcp_rfc1337" = 1;
 
-    # Conntrack tuning for 8GB RAM router
+    # Conntrack tuning — safe defaults for 4GB+ RAM routers
     "net.netfilter.nf_conntrack_max" = 524288;
     "net.netfilter.nf_conntrack_tcp_timeout_established" = 7200;
     "net.netfilter.nf_conntrack_udp_timeout_stream" = 120;
     # nf_conntrack_buckets is auto-sized from nf_conntrack_max by the kernel
     # and is read-only on most configurations — don't set it via sysctl
 
-    # Network buffer tuning for 8GB RAM — helps with burst traffic
+    # Network buffer tuning — helps with burst traffic
     "net.core.rmem_max" = 16777216;
     "net.core.wmem_max" = 16777216;
     "net.core.rmem_default" = 1048576;
@@ -55,7 +55,7 @@
     "net.ipv4.tcp_rmem" = "4096 1048576 16777216";
     "net.ipv4.tcp_wmem" = "4096 1048576 16777216";
 
-    # Increase backlog for bursty traffic on a 2.5G NIC
+    # Increase backlog for bursty traffic
     "net.core.netdev_max_backlog" = 8192;
     "net.core.somaxconn" = 4096;
 

@@ -62,7 +62,7 @@
         ];
         port = 53;
 
-        # Performance — tuned for N5105 (4 cores) / 8GB RAM
+        # Performance — tune num-threads and slabs to match your core count
         num-threads = 4;
         msg-cache-slabs = 4;
         rrset-cache-slabs = 4;

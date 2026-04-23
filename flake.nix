@@ -3,14 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    chaotic.url = "github:chaotic-cx/nyx/nyxpkgs-unstable";
-    chaotic.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, chaotic, ... }:
+  outputs = { self, nixpkgs, ... }:
   let
     firewallModules = [
-      chaotic.nixosModules.default
       ./hardware-configuration.nix
       ./configuration.nix
       ./modules/options.nix

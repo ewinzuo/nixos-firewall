@@ -1,4 +1,4 @@
-# Network interface configuration for a 4-port N5105 firewall appliance.
+# Network interface configuration for a 4-port firewall appliance.
 #
 # Port layout:
 #   - Port 1 (wan0):  upstream ISP/modem — DHCP
