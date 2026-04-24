@@ -1,11 +1,15 @@
 # Standalone VM for live-testing the full firewall stack with WARP + MASQUE.
 #
 # Build:  nix build .#warp-test-vm
-# Run:    ./result/bin/run-warp-test-vm-vm
+# Run:    ./result/bin/run-warp-test-vm
 #
-# The VM boots with user-mode networking (SLIRP) so it has internet
-# access through the host. Once booted, log in as root (no password)
-# and run:
+# Topology: single SLIRP NIC. We rename eth0 → wan0 so the production
+# firewall, network, and dhcp-dns modules apply with their real
+# interface names; only the things SLIRP/single-NIC topology can't
+# provide (no LAN bridge, no upstream DHCP server we control) are
+# overridden.
+#
+# Once booted, log in as root (no password) and run:
 #   /etc/setup-warp.sh        # register + connect (once)
 #   /etc/test-warp-live.sh    # run integration tests
 { config, lib, pkgs, modulesPath, ... }:
@@ -14,9 +18,9 @@
   imports = [
     ../configuration.nix
     ../modules/options.nix
+    ../modules/network.nix
     ../modules/firewall.nix
     ../modules/dhcp-dns.nix
-    ../modules/network.nix
     ../modules/warp.nix
   ];
 
@@ -35,79 +39,48 @@
   # No hardware watchdog in QEMU
   systemd.watchdog = lib.mkForce { };
 
-  # ── Single-NIC overrides ───────────────────────────────────────────
-  # SLIRP gives us eth0 (10.0.2.x). We treat it as WAN.
-  # No physical LAN in the VM — Kea/Unbound still start but aren't used.
-  networking.useDHCP = lib.mkForce true;
-  systemd.network.enable = lib.mkForce false;
-  systemd.network.links = lib.mkForce { };
-  systemd.network.networks = lib.mkForce { };
+  # ── Rename SLIRP eth0 → wan0 so production rules apply unchanged ───
+  systemd.network.links = lib.mkForce {
+    "10-wan0" = {
+      matchConfig.OriginalName = "eth0";
+      linkConfig.Name = "wan0";
+    };
+  };
 
-  # Unbound: listen on localhost only (no lan0 in the VM)
+  # SLIRP gives DHCP — production wants DHCP on wan0 too, so we just
+  # let it through. The bridge / lan* networks from production have no
+  # matching interfaces and are silently inert.
+  systemd.network.networks."20-wan0" = lib.mkForce {
+    matchConfig.Name = "wan0";
+    networkConfig.DHCP = "ipv4";
+    dhcpV4Config = {
+      UseDNS = false;
+      UseRoutes = true;
+      RouteMetric = 100;
+    };
+    linkConfig.RequiredForOnline = "routable";
+  };
+
+  # No physical LAN — drop the br-lan requirement so boot doesn't stall
+  systemd.network.networks."20-br-lan" = lib.mkForce {
+    matchConfig.Name = "br-lan";
+    networkConfig = {
+      Address = "192.168.1.1/24";
+      KeepConfiguration = "static";
+    };
+    linkConfig.RequiredForOnline = "no";
+  };
+
+  # Unbound: no LAN to serve, listen on localhost only
   services.unbound.settings.server.interface = lib.mkForce [ "127.0.0.1" ];
   services.unbound.settings.server.access-control = lib.mkForce [
     "127.0.0.0/8 allow"
   ];
 
-  # Kea: disable in the VM (no LAN clients)
+  # Kea: no LAN clients to lease to
   services.kea.dhcp4.enable = lib.mkForce false;
 
-  # ── nftables: full production rules adapted for single-NIC VM ──────
-  # eth0 = WAN equivalent. Kill switch blocks web traffic on eth0.
-  # When WARP is connected, warp-svc routes web traffic via CloudflareWARP.
-  # When WARP is disconnected, web traffic tries eth0 and gets killed.
-  networking.nftables.ruleset = lib.mkForce ''
-    table inet filter {
-      chain input {
-        type filter hook input priority filter; policy drop;
-
-        iifname "lo" accept
-        ct state established,related accept
-        ct state invalid drop
-
-        # Allow DHCP (SLIRP)
-        udp sport 67 udp dport 68 accept
-
-        # Allow DNS, SSH, ICMP on all interfaces (test VM)
-        udp dport 53 accept
-        tcp dport 53 accept
-        tcp dport 22 accept
-        ip protocol icmp accept
-
-        limit rate 10/second burst 50 packets log prefix "[nft-input-drop] "
-        drop
-      }
-
-      chain forward {
-        type filter hook forward priority filter; policy drop;
-        ct state established,related accept
-        ct state invalid drop
-        meta nfproto ipv6 drop
-
-        # Kill switch: block web traffic on eth0 (WAN)
-        # This is the critical rule — web must go through CloudflareWARP
-        oifname "eth0" tcp dport { 80, 443 } drop
-        oifname "eth0" udp dport 443 drop
-
-        drop
-      }
-
-      chain output {
-        type filter hook output priority filter; policy accept;
-        # Firewall itself is trusted — allow all outbound
-      }
-    }
-
-    table ip nat {
-      chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-        oifname "eth0" masquerade
-        oifname "CloudflareWARP" masquerade
-      }
-    }
-  '';
-
-  # ── Loosen rp_filter for SLIRP (10.0.2.x is technically a bogon) ──
+  # ── Loosen rp_filter for SLIRP (10.0.2.x is a bogon-looking range) ─
   boot.kernel.sysctl."net.ipv4.conf.all.rp_filter" = lib.mkForce 0;
   boot.kernel.sysctl."net.ipv4.conf.default.rp_filter" = lib.mkForce 0;
 

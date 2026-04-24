@@ -27,8 +27,9 @@ cleanup() {
   nft add rule inet filter forward ct state established,related accept 2>/dev/null || true
   nft add rule inet filter forward ct state invalid drop 2>/dev/null || true
   nft add rule inet filter forward meta nfproto ipv6 drop 2>/dev/null || true
-  nft add rule inet filter forward oifname "eth0" tcp dport '{ 80, 443 }' drop 2>/dev/null || true
-  nft add rule inet filter forward oifname "eth0" udp dport 443 drop 2>/dev/null || true
+  nft add rule inet filter forward iifname "br-lan" oifname "wan0" drop 2>/dev/null || true
+  nft add rule inet filter forward iifname "br-lan" oifname "wg-mullvad" accept 2>/dev/null || true
+  nft add rule inet filter forward iifname "br-lan" oifname "CloudflareWARP" accept 2>/dev/null || true
   nft add rule inet filter forward drop 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -74,6 +75,9 @@ sysctl -q net.ipv4.ip_forward=1
 sysctl -q net.ipv4.conf.veth-fw.forwarding=1
 
 # ── Setup: nftables forward rules for the LAN client ──────────────
+# Mirrors production modules/firewall.nix forward chain, but with the
+# synthetic veth-fw substituted for br-lan (no real bridge in this VM).
+# Counters are added so we can assert which rules actually fire.
 echo "Configuring firewall forwarding rules..."
 
 nft flush chain inet filter forward
@@ -81,15 +85,11 @@ nft add rule inet filter forward ct state established,related accept
 nft add rule inet filter forward ct state invalid drop
 nft add rule inet filter forward meta nfproto ipv6 drop
 
-# Kill switch: block client web traffic on WAN (must go through WARP)
-nft add rule inet filter forward iifname "veth-fw" oifname "eth0" tcp dport '{ 80, 443 }' counter drop
-nft add rule inet filter forward iifname "veth-fw" oifname "eth0" udp dport 443 counter drop
+# Kill switch: block client traffic on WAN (must go through WARP/Mullvad)
+nft add rule inet filter forward iifname "veth-fw" oifname "wan0" counter drop
 
 # Allow client traffic through CloudflareWARP
 nft add rule inet filter forward iifname "veth-fw" oifname "CloudflareWARP" counter accept
-
-# Allow client non-web traffic through WAN
-nft add rule inet filter forward iifname "veth-fw" oifname "eth0" counter accept
 
 # Default drop
 nft add rule inet filter forward counter drop
@@ -144,24 +144,12 @@ else
   fail "0 packets forwarded through CloudflareWARP"
 fi
 
-echo "[6] Kill switch active: WAN web counter"
-WAN_BLOCKED=$(nft list chain inet filter forward 2>/dev/null | grep 'oifname "eth0" tcp dport.*drop' | grep -oP 'packets \K[0-9]+' | head -1 || echo "0")
-if nft list chain inet filter forward 2>/dev/null | grep -q 'oifname "eth0" tcp dport.*drop'; then
+echo "[6] Kill switch active: bare WAN forwarding is dropped"
+WAN_BLOCKED=$(nft list chain inet filter forward 2>/dev/null | grep 'oifname "wan0" counter packets' | grep -oP 'packets \K[0-9]+' | head -1 || echo "0")
+if nft list chain inet filter forward 2>/dev/null | grep -q 'oifname "wan0" counter'; then
   pass "kill switch rule present ($WAN_BLOCKED packets blocked on WAN)"
 else
   fail "kill switch rule missing from forward chain"
-fi
-
-echo "[7] Client non-web traffic works (ping through WAN)"
-if ip netns exec client ping -c 2 -W 5 1.1.1.1 &>/dev/null; then
-  pass "client ping to 1.1.1.1 works (non-web via WAN)"
-else
-  # Ping may be blocked by SLIRP; try DNS as fallback
-  if ip netns exec client dig +short +time=5 cloudflare.com @1.1.1.1 2>/dev/null | grep -q .; then
-    pass "client DNS to 1.1.1.1 works (non-web via WAN)"
-  else
-    skip "non-web connectivity test inconclusive in VM"
-  fi
 fi
 
 # ══════════════════════════════════════════════════════════════════════
