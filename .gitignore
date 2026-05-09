@@ -1,3 +1,7 @@
 result
 *.qcow2
 secrets-config.nix
+
+# Decrypted-at-runtime test secrets (never commit plaintext)
+tests/e2e/secrets/mullvad.yaml.decrypted
+tests/e2e/.runtime/

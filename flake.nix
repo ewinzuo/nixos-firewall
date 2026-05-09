@@ -149,5 +149,51 @@
 
     packages.x86_64-linux.warp-test-vm =
       self.nixosConfigurations."warp-test-vm".config.system.build.vm;
+
+    # ── Black-box e2e double-tunnel test ─────────────────────────────
+    # Three live-internet VMs (firewall + client + upstream) wired with
+    # QEMU socket vlans. The runner script tests/e2e/run-e2e.sh launches
+    # them, drives assertions over SSH, and proves wan0 only ever emits
+    # WireGuard. Requires sops-decrypted Mullvad creds (see .sops.yaml).
+    #
+    # Build:  nix build .#e2e-firewall-vm  (+ .#e2e-client-vm, .#e2e-upstream-vm)
+    # Run:    ./tests/e2e/run-e2e.sh
+    nixosConfigurations."e2e-firewall-vm" = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./tests/e2e/firewall-vm.nix
+        (nixpkgs + "/nixos/modules/virtualisation/qemu-vm.nix")
+      ];
+    };
+    nixosConfigurations."e2e-client-vm" = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./tests/e2e/client-vm.nix
+        (nixpkgs + "/nixos/modules/virtualisation/qemu-vm.nix")
+      ];
+    };
+    nixosConfigurations."e2e-upstream-vm" = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./tests/e2e/upstream-vm.nix
+        (nixpkgs + "/nixos/modules/virtualisation/qemu-vm.nix")
+      ];
+    };
+
+    packages.x86_64-linux.e2e-firewall-vm =
+      self.nixosConfigurations."e2e-firewall-vm".config.system.build.vm;
+    packages.x86_64-linux.e2e-client-vm =
+      self.nixosConfigurations."e2e-client-vm".config.system.build.vm;
+    packages.x86_64-linux.e2e-upstream-vm =
+      self.nixosConfigurations."e2e-upstream-vm".config.system.build.vm;
+
+    apps.x86_64-linux.e2e-test =
+      let pkgs = import nixpkgs { system = "x86_64-linux"; };
+      in {
+        type = "app";
+        program = toString (pkgs.writeShellScript "run-e2e-test" ''
+          exec ${toString ./tests/e2e/run-e2e.sh} "$@"
+        '');
+      };
   };
 }

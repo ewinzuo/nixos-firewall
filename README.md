@@ -115,6 +115,15 @@ tests/
   warp-vm.nix                Live WARP test VM
   test-warp-live.sh          WARP verification script
   test-client-routing.sh     Client routing E2E test
+  e2e/
+    firewall-vm.nix          Production firewall stack inside QEMU
+    client-vm.nix            LAN client VM (sits behind the firewall)
+    upstream-vm.nix          NAT gateway + WAN observer
+    run-e2e.sh               Boots the 3 VMs and runs the driver
+    test-driver.sh           SSH-driven assertions (tunnels, kill switch, leak detection)
+    secrets/
+      mullvad.example.yaml   Plaintext schema for the encrypted creds file
+      mullvad.yaml           Encrypted Mullvad creds (sops + age)
 ```
 
 ## Configuration
@@ -165,6 +174,53 @@ nix build .#warp-test-vm
 /etc/setup-warp.sh
 /etc/test-warp-live.sh
 ```
+
+### Black-box end-to-end test (`tests/e2e/`)
+
+Boots three live-internet QEMU VMs (firewall, client, upstream) and asserts
+that the entire double-tunnel + kill-switch path actually works. Use this
+locally before tagging a release, or run it from CI as a gate.
+
+The firewall VM uses your real Mullvad credentials — those are encrypted
+at rest with [sops](https://github.com/getsops/sops) + [age](https://github.com/FiloSottile/age).
+
+**One-time setup:**
+
+```sh
+nix shell nixpkgs#age nixpkgs#sops
+age-keygen -o ~/.config/sops/age/keys.txt        # generates a keypair
+age-keygen -y ~/.config/sops/age/keys.txt        # prints the public key
+```
+
+Replace `AGE_PUBLIC_KEY_LOCAL_REPLACE_ME` in `.sops.yaml` with that pubkey,
+then create the encrypted secrets file (the schema lives at
+`tests/e2e/secrets/mullvad.example.yaml`):
+
+```sh
+sops tests/e2e/secrets/mullvad.yaml             # opens $EDITOR; saves encrypted
+```
+
+**Run the test:**
+
+```sh
+nix shell nixpkgs#sops nixpkgs#qemu nixpkgs#sshpass nixpkgs#openssh
+./tests/e2e/run-e2e.sh
+```
+
+The runner decrypts the secrets to `tests/e2e/.runtime/` (gitignored), builds
+the three VMs, wires them with QEMU socket vlans, and drives the assertions
+over SSH. Expect the first run to take ~10 minutes (image build + WARP
+registration); reruns are ~3 minutes.
+
+**CI usage:** generate a second age keypair on the runner, store its private
+half as the `SOPS_AGE_KEY` GitHub Actions secret, uncomment the `ci_runner`
+anchor in `.sops.yaml`, and re-encrypt:
+
+```sh
+sops updatekeys tests/e2e/secrets/mullvad.yaml
+```
+
+Then export `SOPS_AGE_KEY_FILE` in the workflow before invoking the runner.
 
 ## Network layout
 

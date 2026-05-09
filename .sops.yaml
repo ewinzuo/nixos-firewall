@@ -1,0 +1,26 @@
+# sops + age config for encrypting test secrets in this repo.
+#
+# Setup (one-time, local):
+#   1. Install age + sops:   nix shell nixpkgs#age nixpkgs#sops
+#   2. Generate a keypair:   age-keygen -o ~/.config/sops/age/keys.txt
+#   3. Print your pubkey:    age-keygen -y ~/.config/sops/age/keys.txt
+#   4. Replace the AGE_PUBLIC_KEY_LOCAL_REPLACE_ME placeholder below.
+#   5. Create the encrypted secrets file:
+#        sops tests/e2e/secrets/mullvad.yaml
+#      (opens $EDITOR; saves encrypted; see mullvad.example.yaml for the schema)
+#
+# Add a CI key later by uncommenting the ci_runner anchor + reference,
+# generating a fresh age keypair on the runner (or in your secrets manager),
+# storing the private half as the SOPS_AGE_KEY GitHub Actions secret, and
+# re-encrypting the file:  sops updatekeys tests/e2e/secrets/mullvad.yaml
+
+keys:
+  - &user_local age1ewyjz9fmmn6fpwquwsypw4x07nh9wad0f6myqf38jcaewl7ufs3qxn24vx
+  # - &ci_runner AGE_PUBLIC_KEY_CI_REPLACE_ME
+
+creation_rules:
+  - path_regex: tests/e2e/secrets/.*\.yaml$
+    key_groups:
+      - age:
+          - *user_local
+          # - *ci_runner
