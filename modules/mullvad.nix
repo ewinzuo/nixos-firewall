@@ -19,7 +19,7 @@ in
 {
   networking.wireguard.interfaces.wg-mullvad = {
     ips = [ cfg.address ];
-    privateKeyFile = "/etc/secrets/mullvad/private-key";
+    privateKeyFile = cfg.privateKeyFile;
 
     peers = [{
       publicKey = cfg.serverKey;
@@ -84,10 +84,14 @@ in
     '';
   };
 
-  # WARP must start after Mullvad routes are active
+  # WARP must start after Mullvad routes are active, and STOP when
+  # Mullvad stops. BindsTo is the strict kill switch: if wg-mullvad
+  # goes down, systemd stops WARP too, removing the CloudflareWARP
+  # interface and ensuring no LAN traffic can escape unprotected.
   systemd.services.cloudflare-warp = {
     after = [ "mullvad-routes.service" ];
     wants = [ "mullvad-routes.service" ];
+    bindsTo = [ "wireguard-wg-mullvad.service" ];
   };
 
   # Exclude the Mullvad endpoint from WARP's split tunnel so WARP's

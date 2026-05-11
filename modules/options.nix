@@ -38,13 +38,13 @@ in
       };
       lan2Mac = mkOption {
         type = types.str;
-        default = "UNCONFIGURED";
-        description = "MAC address for LAN port 2.";
+        default = "";
+        description = "MAC address for LAN port 2 (optional).";
       };
       lan3Mac = mkOption {
         type = types.str;
-        default = "UNCONFIGURED";
-        description = "MAC address for LAN port 3.";
+        default = "";
+        description = "MAC address for LAN port 3 (optional).";
       };
     };
 
@@ -68,6 +68,11 @@ in
         type = types.str;
         default = "10.0.0.1/32";
         description = "Tunnel address assigned by Mullvad (CIDR).";
+      };
+      privateKeyFile = mkOption {
+        type = types.str;
+        default = "/etc/secrets/mullvad/private-key";
+        description = "Path to the WireGuard private key file. Overridden by sops.nix in production.";
       };
     };
   };

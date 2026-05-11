@@ -1,12 +1,13 @@
-# Network interface configuration for a 4-port firewall appliance.
+# Network interface configuration for a firewall appliance (1 WAN + 1–3 LAN).
 #
 # Port layout:
 #   - Port 1 (wan0):  upstream ISP/modem — DHCP
 #   - Port 2 (lan1):  ┐
-#   - Port 3 (lan2):  ├─ bridged as br-lan (10.0.1.1/24)
+#   - Port 3 (lan2):  ├─ bridged as br-lan (192.168.1.1/24)  (lan2/lan3 optional)
 #   - Port 4 (lan3):  ┘
 #
-# The 3 LAN ports are bridged together so the box acts as a firewall + switch.
+# The LAN ports are bridged together so the box acts as a firewall + switch.
+# lan2 and lan3 are only configured when their MAC address is set (non-empty).
 # The actual interface names (enp1s0, enp2s0, etc.) are mapped via systemd
 # link units so the rest of the config uses stable names regardless of hardware.
 #
@@ -30,11 +31,11 @@ in
       matchConfig.MACAddress = net.lan1Mac;
       linkConfig.Name = "lan1";
     };
-    "10-lan2" = {
+    "10-lan2" = lib.mkIf (net.lan2Mac != "") {
       matchConfig.MACAddress = net.lan2Mac;
       linkConfig.Name = "lan2";
     };
-    "10-lan3" = {
+    "10-lan3" = lib.mkIf (net.lan3Mac != "") {
       matchConfig.MACAddress = net.lan3Mac;
       linkConfig.Name = "lan3";
     };
@@ -74,12 +75,12 @@ in
       networkConfig.Bridge = "br-lan";
       linkConfig.RequiredForOnline = "no";
     };
-    "20-lan2" = {
+    "20-lan2" = lib.mkIf (net.lan2Mac != "") {
       matchConfig.Name = "lan2";
       networkConfig.Bridge = "br-lan";
       linkConfig.RequiredForOnline = "no";
     };
-    "20-lan3" = {
+    "20-lan3" = lib.mkIf (net.lan3Mac != "") {
       matchConfig.Name = "lan3";
       networkConfig.Bridge = "br-lan";
       linkConfig.RequiredForOnline = "no";

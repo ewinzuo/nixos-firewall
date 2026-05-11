@@ -49,7 +49,24 @@
     };
   };
 
+  # systemd-resolved stays enabled (WARP's connectivity check needs DNS
+  # during bootstrap) but we redirect it to forward through Unbound
+  # instead of using its own upstream (1.1.1.1 from wan0 config).
+  # This ensures all DNS goes: resolved → Unbound → Quad9 → Mullvad.
+  services.resolved.enable = true;
+  # Override resolved's upstream to use Unbound instead of the
+  # per-interface DNS (1.1.1.1 from wan0).
+  networking.nameservers = [ "127.0.0.1" ];
+  services.resolved.fallbackDns = [];
+
   # ── Unbound recursive DNS resolver ──────────────────────────────────
+  # Unbound must not start until Mullvad routes are active, otherwise
+  # its first query to Quad9 goes out bare wan0.
+  systemd.services.unbound = {
+    after = [ "mullvad-routes.service" ];
+    wants = [ "mullvad-routes.service" ];
+  };
+
   services.unbound = {
     enable = true;
     settings = {
@@ -103,14 +120,15 @@
 
       remote-control.control-enable = true;
 
-      # Upstream resolver — Quad9 unfiltered (keeps CDN geo-locality)
+      # Upstream resolver — Cloudflare, resolved inside WARP's network.
+      # Plain DNS (not TLS) because the tunnel already encrypts traffic.
       forward-zone = [
         {
           name = ".";
-          forward-tls-upstream = true;
+          forward-tls-upstream = false;
           forward-addr = [
-            "9.9.11.11@853#dns11.quad9.net"
-            "149.112.112.11@853#dns11.quad9.net"
+            "1.1.1.1"
+            "1.0.0.1"
           ];
         }
       ];

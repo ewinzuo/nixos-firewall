@@ -172,7 +172,17 @@
 
         chain output {
           type filter hook output priority filter; policy accept;
-          # Firewall itself is trusted — allow all outbound
+
+          # Established/related — always allowed
+          ct state established,related accept
+
+          # ── WAN output lock: only WireGuard + DHCP may leave bare ────
+          # Everything else (DNS, HTTPS, etc.) must go through a tunnel.
+          oifname "wan0" udp dport 67 accept
+          oifname "wan0" udp dport ${toString config.firewall.mullvad.port} accept
+          oifname "wan0" ip protocol icmp accept
+          oifname "wan0" limit rate 10/second burst 50 packets log prefix "[nft-output-leak] "
+          oifname "wan0" drop
         }
 
         # ── WAN input rules ───────────────────────────────────────────
