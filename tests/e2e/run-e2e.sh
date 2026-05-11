@@ -25,9 +25,16 @@
 #
 # Usage: tests/e2e/run-e2e.sh
 #
-# Requires: nix, sops, age, qemu-system-x86_64, ssh, sshpass
+# Requires: nix, sops, age, qemu-system-x86_64, ssh
+#
+# CI/CD:
+#   - Exit code 0 = all pass, 1 = failures
+#   - JUnit XML report: tests/e2e/.runtime/report.xml
+#   - Set E2E_REPORT_FILE to override report location
+#   - Set E2E_NO_BELL=1 to suppress desktop notification
 
 set -euo pipefail
+RUN_START=$(date +%s)
 
 # ── Paths ──────────────────────────────────────────────────────────────
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -64,17 +71,23 @@ PIDS=()
 cleanup() {
   local rc=$?
   echo "── cleanup ────────────────────────────────────────────────────"
+  # Kill the process group (negative PID) so QEMU children of the
+  # subshell die too, not just the subshell wrapper.
   for p in "${PIDS[@]:-}"; do
     if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then
-      kill -TERM "$p" 2>/dev/null || true
+      kill -TERM -- -"$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true
     fi
   done
-  # Give them a beat to exit cleanly, then SIGKILL stragglers.
   sleep 2
   for p in "${PIDS[@]:-}"; do
     if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then
-      kill -KILL "$p" 2>/dev/null || true
+      kill -KILL -- -"$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null || true
     fi
+  done
+  # Wait for ports to actually be released before returning
+  for i in $(seq 1 10); do
+    ss -tlnp 2>/dev/null | grep -qE ':(2223|2224)' || break
+    sleep 1
   done
   exit "$rc"
 }
@@ -152,12 +165,14 @@ UP_MAC_WAN="52:54:00:33:00:01"
 start_vm() {
   local name="$1" script="$2" workdir="$3" extra_opts="$4" logfile="$5"
   echo "── starting $name ─────────────────────────────────────────────"
-  (
-    cd "$workdir"
-    QEMU_OPTS="$extra_opts" \
-    QEMU_KERNEL_PARAMS="console=ttyS0,115200" \
-      "$script" -nographic >"$logfile" 2>&1
-  ) &
+  # setsid puts the subshell + QEMU child in their own process group
+  # so cleanup can kill the entire group with kill -TERM -- -$pid.
+  setsid bash -c "
+    cd \"$workdir\"
+    QEMU_OPTS=\"$extra_opts\" \
+    QEMU_KERNEL_PARAMS=\"console=ttyS0,115200\" \
+      \"$script\" -nographic >\"$logfile\" 2>&1
+  " &
   local pid=$!
   PIDS+=("$pid")
   echo "$name pid=$pid log=$logfile"
@@ -203,14 +218,14 @@ ssh_to() {
 
 wait_for_ssh() {
   local name="$1" port="$2"
-  local deadline=$(( $(date +%s) + 600 ))   # 10 min: WARP can be slow on cold boot
+  local deadline=$(( $(date +%s) + 180 ))   # 3 min — VMs boot in ~30s
   echo "── waiting for $name SSH on host:$port ────────────────────────"
   while (( $(date +%s) < deadline )); do
     if ssh_to "$port" true 2>/dev/null; then
       echo "$name reachable."
       return 0
     fi
-    sleep 5
+    sleep 2
   done
   echo "ERROR: $name did not become SSH-reachable in time." >&2
   echo "─── last 60 lines of log: ───" >&2
@@ -225,7 +240,7 @@ wait_for_ssh client   2223
 # which nftables permits for SSH). This avoids needing an eth0/mgmt port-
 # forward on the firewall and tests the real LAN path.
 echo "── waiting for firewall SSH via client jump ────────────────────"
-fw_deadline=$(( $(date +%s) + 600 ))
+fw_deadline=$(( $(date +%s) + 180 ))
 while (( $(date +%s) < fw_deadline )); do
   if ssh "${SSH_OPTS[@]}" -o "ProxyCommand=$FW_JUMP_PROXY" root@192.168.1.1 true 2>/dev/null; then
     echo "firewall reachable via client."
@@ -246,13 +261,31 @@ if [[ ! -x "$DRIVER" ]]; then
 fi
 
 echo "── running assertions ─────────────────────────────────────────"
-RUNNER_KEY="$RUNNER_KEY" "$DRIVER"
+RUNNER_KEY="$RUNNER_KEY" E2E_REPORT_FILE="${E2E_REPORT_FILE:-$RUNTIME/report.xml}" "$DRIVER"
 RC=$?
 
+TOTAL_TIME=$(( $(date +%s) - RUN_START ))
+
 if (( RC == 0 )); then
-  echo "── e2e PASS ───────────────────────────────────────────────────"
+  echo "── e2e PASS (${TOTAL_TIME}s total) ─────────────────────────────"
 else
-  echo "── e2e FAIL (rc=$RC) ──────────────────────────────────────────" >&2
-  echo "VM logs are in $LOGS" >&2
+  echo "── e2e FAIL (rc=$RC, ${TOTAL_TIME}s total) ────────────────────" >&2
+  echo "VM logs: $LOGS" >&2
+  echo "Report:  ${E2E_REPORT_FILE:-$RUNTIME/report.xml}" >&2
 fi
+
+# ── Desktop notification (doorbell) ──────────────────────────────────
+if [[ "${E2E_NO_BELL:-}" != "1" ]]; then
+  if (( RC == 0 )); then
+    SUMMARY="E2E PASS (${TOTAL_TIME}s)"
+  else
+    SUMMARY="E2E FAIL (${TOTAL_TIME}s)"
+  fi
+  # Try notify-send (Linux), then terminal bell as fallback
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -u normal "nixos-firewall e2e" "$SUMMARY" 2>/dev/null || true
+  fi
+  printf '\a'  # terminal bell
+fi
+
 exit "$RC"

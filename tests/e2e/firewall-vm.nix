@@ -88,14 +88,8 @@ in
   # fails under net.ifnames=0 in QEMU), set the production MAC options
   # to the stable QEMU MACs assigned in run-e2e.sh. This lets the
   # standard network.nix MAC-based .link rules rename the interfaces.
-  #
-  # TODO: options.nix hardcodes exactly 4 ports (wan0 + 3 LAN). Make
-  # the port list dynamic so systems with arbitrary port counts don't
-  # need dummy MACs for nonexistent interfaces.
   firewall.network.wan0Mac = "52:54:00:11:00:01";
   firewall.network.lan1Mac = "52:54:00:11:00:02";
-  firewall.network.lan2Mac = "52:54:00:11:00:03";
-  firewall.network.lan3Mac = "52:54:00:11:00:04";
 
   # eth0 = mgmt slirp. DHCP for the IP, but no default route — production
   # routing must own that.
@@ -118,7 +112,8 @@ in
     networkConfig = {
       Address = "10.99.0.2/24";
       Gateway = "10.99.0.1";
-      DNS = "1.1.1.1";
+      # No DNS here — resolved must use Unbound (127.0.0.1), not a
+      # per-link DNS that bypasses the tunnel.
     };
     linkConfig.RequiredForOnline = "routable";
   };
