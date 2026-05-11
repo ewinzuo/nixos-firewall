@@ -1,24 +1,33 @@
-# sops + age config for encrypting test secrets in this repo.
+# sops + age config for encrypting secrets in this repo.
 #
-# Setup (one-time, local):
-#   1. Install age + sops:   nix shell nixpkgs#age nixpkgs#sops
-#   2. Generate a keypair:   age-keygen -o ~/.config/sops/age/keys.txt
-#   3. Print your pubkey:    age-keygen -y ~/.config/sops/age/keys.txt
-#   4. Replace the AGE_PUBLIC_KEY_LOCAL_REPLACE_ME placeholder below.
-#   5. Create the encrypted secrets file:
-#        sops tests/e2e/secrets/mullvad.yaml
-#      (opens $EDITOR; saves encrypted; see mullvad.example.yaml for the schema)
+# Two sets of secrets:
+#   1. Production (secrets/) — Mullvad private key, decrypted on the
+#      firewall at boot via sops-nix. Encrypted to both the admin's
+#      local key (for editing) and the firewall's host key (for decryption).
+#   2. E2E tests (tests/e2e/secrets/) — test-only Mullvad creds, encrypted
+#      to the admin's local key only.
 #
-# Add a CI key later by uncommenting the ci_runner anchor + reference,
-# generating a fresh age keypair on the runner (or in your secrets manager),
-# storing the private half as the SOPS_AGE_KEY GitHub Actions secret, and
-# re-encrypting the file:  sops updatekeys tests/e2e/secrets/mullvad.yaml
+# Setup:
+#   nix shell nixpkgs#age nixpkgs#sops nixpkgs#ssh-to-age
+#
+# To get the firewall's age pubkey from its SSH host key:
+#   ssh root@192.168.1.1 "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
 
 keys:
   - &user_local age1ewyjz9fmmn6fpwquwsypw4x07nh9wad0f6myqf38jcaewl7ufs3qxn24vx
+  # Uncomment and replace after running ssh-to-age on the firewall's host key:
+  # - &firewall_prod AGE_PUBLIC_KEY_FROM_SSH_TO_AGE
   # - &ci_runner AGE_PUBLIC_KEY_CI_REPLACE_ME
 
 creation_rules:
+  # Production secrets — encrypted to admin + firewall host key
+  - path_regex: secrets/.*\.yaml$
+    key_groups:
+      - age:
+          - *user_local
+          # - *firewall_prod
+
+  # E2E test secrets — encrypted to admin only
   - path_regex: tests/e2e/secrets/.*\.yaml$
     key_groups:
       - age:
