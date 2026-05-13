@@ -55,6 +55,79 @@ cl() { ssh "${SSH_OPTS[@]}" -p 2223 root@127.0.0.1 "$@"; }
 up() { ssh "${SSH_OPTS[@]}" -p 2224 root@127.0.0.1 "$@"; }
 
 # ─────────────────────────────────────────────────────────────────────
+phase "A0. Connectivity sanity checks"
+# ─────────────────────────────────────────────────────────────────────
+echo "checking upstream internet access..."
+if up 'ping -c 2 -W 3 1.1.1.1 >/dev/null 2>&1'; then
+  ok "upstream can reach the internet"
+else
+  bad "upstream has no internet — slirp/host network problem"
+fi
+
+echo "checking firewall → upstream (wan0 path)..."
+if fw 'ping -c 2 -W 3 10.99.0.1 >/dev/null 2>&1'; then
+  ok "firewall can reach upstream via wan0"
+else
+  bad "firewall cannot reach upstream — vlan1 broken"
+fi
+
+echo "checking Mullvad WireGuard handshake..."
+fw 'wg show wg-mullvad 2>&1 || true'
+
+echo "checking firewall internet via Mullvad..."
+if fw 'ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1'; then
+  ok "firewall has internet (via Mullvad)"
+else
+  echo "  no internet via Mullvad, trying direct via wan0..."
+  fw 'ip route; echo "---"; ip route get 1.1.1.1 2>&1 || true'
+  bad "firewall has no internet — Mullvad tunnel or upstream NAT problem"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+phase "A1. DNS diagnostics (Unbound → Quad9)"
+# ─────────────────────────────────────────────────────────────────────
+echo "--- Unbound service status ---"
+fw 'systemctl status unbound --no-pager -l 2>&1 | head -30' || true
+
+echo "--- Unbound config (forward-zone) ---"
+fw 'grep -A 5 "forward-zone" /etc/unbound/unbound.conf 2>/dev/null || cat /etc/unbound/unbound.conf | tail -20' || true
+
+echo "--- Can firewall reach Quad9 (ICMP)? ---"
+fw 'ping -c 3 -W 3 9.9.9.9 2>&1' || true
+fw 'ping -c 3 -W 3 149.112.112.112 2>&1' || true
+
+echo "--- Route to Quad9 ---"
+fw 'ip route get 9.9.9.9 2>&1' || true
+
+echo "--- Can firewall reach Quad9 port 53 (TCP)? ---"
+fw 'timeout 5 bash -c "echo | nc -w 3 9.9.9.9 53 && echo TCP_OK || echo TCP_FAIL" 2>&1' || true
+
+echo "--- Direct dig from firewall to Quad9 ---"
+fw 'dig @9.9.9.9 cloudflare.com A +short +timeout=5 +tries=1 2>&1' || true
+
+echo "--- Direct dig from firewall to Quad9 (TCP) ---"
+fw 'dig @9.9.9.9 cloudflare.com A +short +timeout=5 +tries=1 +tcp 2>&1' || true
+
+echo "--- dig via Unbound (localhost) ---"
+fw 'dig @127.0.0.1 cloudflare.com A +timeout=5 +tries=1 2>&1' || true
+
+echo "--- dig via Unbound from client ---"
+cl 'dig @192.168.1.1 cloudflare.com A +timeout=5 +tries=1 2>&1' || true
+
+echo "--- Unbound logs (last 30 lines) ---"
+fw 'journalctl -u unbound --no-pager -n 30 2>&1' || true
+
+echo "--- tcpdump: DNS traffic from firewall for 10s ---"
+fw 'timeout 10 tcpdump -i any -nn port 53 -c 20 2>&1 &
+    sleep 1
+    dig @127.0.0.1 example.com +short +timeout=3 +tries=1 2>/dev/null
+    dig @9.9.9.9 example.org +short +timeout=3 +tries=1 2>/dev/null
+    wait' || true
+
+echo "--- nftables conntrack for port 53 ---"
+fw 'conntrack -L -p udp --dport 53 2>&1 | head -20; conntrack -L -p tcp --dport 53 2>&1 | head -10' || true
+
+# ─────────────────────────────────────────────────────────────────────
 phase "A. Bootstrap WARP on the firewall"
 # ─────────────────────────────────────────────────────────────────────
 echo "registering and connecting WARP..."

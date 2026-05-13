@@ -120,15 +120,15 @@
 
       remote-control.control-enable = true;
 
-      # Upstream resolver — Cloudflare, resolved inside WARP's network.
-      # Plain DNS (not TLS) because the tunnel already encrypts traffic.
+      # Upstream resolver — Quad9. Plain DNS (not TLS) because the
+      # Mullvad tunnel already encrypts the transport.
       forward-zone = [
         {
           name = ".";
           forward-tls-upstream = false;
           forward-addr = [
-            "1.1.1.1"
-            "1.0.0.1"
+            "9.9.9.9"
+            "149.112.112.112"
           ];
         }
       ];

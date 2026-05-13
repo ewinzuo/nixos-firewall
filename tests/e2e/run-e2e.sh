@@ -70,22 +70,19 @@ mkdir -p "$FW_DIR" "$CL_DIR" "$UP_DIR"
 PIDS=()
 cleanup() {
   local rc=$?
+  # Mask TERM inside cleanup so our own kill -TERM doesn't re-enter.
+  trap '' TERM
   echo "── cleanup ────────────────────────────────────────────────────"
-  # Kill the process group (negative PID) so QEMU children of the
-  # subshell die too, not just the subshell wrapper.
   for p in "${PIDS[@]:-}"; do
-    if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then
-      kill -TERM -- -"$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true
-    fi
+    [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null && kill -TERM "$p" 2>/dev/null || true
   done
   sleep 2
   for p in "${PIDS[@]:-}"; do
-    if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then
-      kill -KILL -- -"$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null || true
-    fi
+    [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null && kill -KILL "$p" 2>/dev/null || true
   done
   # Wait for ports to actually be released before returning
-  for i in $(seq 1 10); do
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
     ss -tlnp 2>/dev/null | grep -qE ':(2223|2224)' || break
     sleep 1
   done
