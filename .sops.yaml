@@ -15,8 +15,7 @@
 
 keys:
   - &user_local age1ewyjz9fmmn6fpwquwsypw4x07nh9wad0f6myqf38jcaewl7ufs3qxn24vx
-  # Uncomment and replace after running ssh-to-age on the firewall's host key:
-  # - &firewall_prod AGE_PUBLIC_KEY_FROM_SSH_TO_AGE
+  - &firewall_prod age13g5934esq56r368z9fhyyd0kafrlucdqy6dgw5yp22uu462zeffqajt6dl
   # - &ci_runner AGE_PUBLIC_KEY_CI_REPLACE_ME
 
 creation_rules:
@@ -25,7 +24,7 @@ creation_rules:
     key_groups:
       - age:
           - *user_local
-          # - *firewall_prod
+          - *firewall_prod
 
   # E2E test secrets — encrypted to admin only
   - path_regex: tests/e2e/secrets/.*\.yaml$

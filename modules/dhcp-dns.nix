@@ -49,15 +49,11 @@
     };
   };
 
-  # systemd-resolved stays enabled (WARP's connectivity check needs DNS
-  # during bootstrap) but we redirect it to forward through Unbound
-  # instead of using its own upstream (1.1.1.1 from wan0 config).
-  # This ensures all DNS goes: resolved → Unbound → Quad9 → Mullvad.
-  services.resolved.enable = true;
-  # Override resolved's upstream to use Unbound instead of the
-  # per-interface DNS (1.1.1.1 from wan0).
+  # Disable systemd-resolved — Unbound handles all DNS. The stub
+  # resolver at 127.0.0.53 was shadowing Unbound and breaking DNS
+  # when resolved had no working upstream configured.
+  services.resolved.enable = false;
   networking.nameservers = [ "127.0.0.1" ];
-  services.resolved.fallbackDns = [];
 
   # ── Unbound recursive DNS resolver ──────────────────────────────────
   # Unbound must not start until Mullvad routes are active, otherwise

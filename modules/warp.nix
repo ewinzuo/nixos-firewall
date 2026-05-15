@@ -56,6 +56,7 @@
       inject() {
         if nft list table inet cloudflare-warp &>/dev/null; then
           if ! nft list chain inet cloudflare-warp input 2>/dev/null | grep -q 'comment "nixos-override"'; then
+            # Allow LAN management traffic (SSH, DNS, DHCP, ping)
             nft insert rule inet cloudflare-warp input iifname "br-lan" accept comment \"nixos-override\"
             nft insert rule inet cloudflare-warp output oifname "br-lan" accept comment \"nixos-override\"
             echo "Injected LAN accept rules into cloudflare-warp table"

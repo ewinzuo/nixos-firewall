@@ -35,7 +35,7 @@ in
       # Only set the endpoint route here — the broader routes are installed
       # by mullvad-routes.service after handshake is confirmed
       WAN_GW=""
-      for i in $(seq 1 30); do
+      for i in $(seq 1 60); do
         WAN_GW=$(${pkgs.iproute2}/bin/ip route show dev wan0 default | ${pkgs.gawk}/bin/awk '{print $3}')
         [ -n "$WAN_GW" ] && break
         sleep 2
@@ -69,7 +69,7 @@ in
 
     script = ''
       echo "Waiting for WireGuard handshake..."
-      for i in $(seq 1 30); do
+      for i in $(seq 1 60); do
         HS=$(wg show wg-mullvad latest-handshakes 2>/dev/null | awk '{print $2}')
         if [ -n "$HS" ] && [ "$HS" != "0" ]; then
           echo "Handshake confirmed, installing routes"
@@ -79,7 +79,7 @@ in
         fi
         sleep 2
       done
-      echo "ERROR: WireGuard handshake failed after 60s — routes NOT installed"
+      echo "ERROR: WireGuard handshake failed after 120s — routes NOT installed"
       exit 1
     '';
   };
@@ -90,7 +90,7 @@ in
   # interface and ensuring no LAN traffic can escape unprotected.
   systemd.services.cloudflare-warp = {
     after = [ "mullvad-routes.service" ];
-    wants = [ "mullvad-routes.service" ];
+    requires = [ "mullvad-routes.service" ];
     bindsTo = [ "wireguard-wg-mullvad.service" ];
   };
 
