@@ -13,8 +13,8 @@
       interfaces-config = {
         interfaces = [ "br-lan" ];
         # Retry opening sockets every 5s if br-lan isn't ready at startup.
-        # Without this, Kea gives up permanently on socket failure (boot -2 race).
         service-sockets-retry-wait-time = 5000;
+        service-sockets-max-retries = 100;
       };
       lease-database = {
         type = "memfile";
@@ -116,15 +116,16 @@
 
       remote-control.control-enable = true;
 
-      # Upstream resolver — Quad9. Plain DNS (not TLS) because the
-      # Mullvad tunnel already encrypts the transport.
+      # Upstream resolver — Quad9 over DNS-over-TLS (port 853).
+      # Plain DNS (port 53) gets intercepted by Mullvad's tunnel-side
+      # DNS hijacking and never reaches Quad9. DoT bypasses this.
       forward-zone = [
         {
           name = ".";
-          forward-tls-upstream = false;
+          forward-tls-upstream = true;
           forward-addr = [
-            "9.9.9.9"
-            "149.112.112.112"
+            "9.9.9.11@853#dns11.quad9.net"
+            "149.112.112.11@853#dns11.quad9.net"
           ];
         }
       ];

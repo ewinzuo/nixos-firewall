@@ -49,6 +49,8 @@ in
       ${pkgs.iproute2}/bin/ip route del 0.0.0.0/1 dev wg-mullvad 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip route del 128.0.0.0/1 dev wg-mullvad 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip route del ${cfg.endpoint}/32 dev wan0 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip rule del fwmark 0x100 lookup 100 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip route flush table 100 2>/dev/null || true
     '';
   };
 
@@ -75,6 +77,10 @@ in
           echo "Handshake confirmed, installing routes"
           ip route replace 0.0.0.0/1 dev wg-mullvad
           ip route replace 128.0.0.0/1 dev wg-mullvad
+
+          # Split routing: non-web LAN traffic (fwmark 0x100) → Mullvad directly
+          ip rule add fwmark 0x100 lookup 100 priority 100 2>/dev/null || true
+          ip route replace default dev wg-mullvad table 100
           exit 0
         fi
         sleep 2

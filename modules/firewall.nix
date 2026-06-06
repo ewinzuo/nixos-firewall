@@ -19,6 +19,10 @@
   boot.kernel.sysctl = {
     "net.ipv4.ip_forward" = 1;
     "net.ipv4.conf.all.forwarding" = 1;
+    # Use the outgoing interface's MTU when forwarding — without this,
+    # forwarded packets skip the MTU check and get handed to the tunnel
+    # userspace (WARP) oversized, causing silent drops and delayed PMTUD.
+    "net.ipv4.ip_forward_use_pmtu" = 1;
     # IPv6 forwarding DISABLED — NAT and WARP are IPv4-only.
     "net.ipv6.conf.all.forwarding" = 0;
 
@@ -145,6 +149,10 @@
           ct state established,related accept
           ct state invalid drop
 
+          # Clamp TCP MSS to path MTU — prevents TLS handshake blackholes
+          # when forwarding through tunnels (WARP ~1280, Mullvad ~1420).
+          tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+
           # Block all IPv6 forwarding — NAT and WARP are IPv4-only
           meta nfproto ipv6 drop
 
@@ -260,6 +268,26 @@
 
           # Masquerade traffic going out Mullvad tunnel
           oifname "wg-mullvad" masquerade
+        }
+      }
+
+
+      # ── Split routing ─────────────────────────────────────────────────
+      # Web traffic (HTTP/HTTPS/QUIC) → CloudflareWARP → Mullvad → Internet
+      # Everything else (gaming, etc.) → Mullvad directly (higher MTU)
+      table inet mangle {
+        chain prerouting {
+          type filter hook prerouting priority mangle; policy accept;
+
+          # Split routing: web → WARP, everything else → Mullvad directly.
+          # Only packets FROM br-lan are marked — reply packets arrive on
+          # wg-mullvad/CloudflareWARP and stay unmarked so they route
+          # normally back to the LAN client.
+          iifname "br-lan" meta mark set 0x100
+
+          # Web traffic: let WARP handle it (clear mark)
+          iifname "br-lan" tcp dport { 80, 443 } meta mark set 0x0
+          iifname "br-lan" udp dport 443 meta mark set 0x0
         }
       }
     '';

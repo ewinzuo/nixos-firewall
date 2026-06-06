@@ -93,6 +93,7 @@ in
         Address = "192.168.1.1/24";
         DHCPServer = false; # We use Kea instead for full control
         KeepConfiguration = "static";
+        ConfigureWithoutCarrier = true;
       };
       linkConfig.RequiredForOnline = "routable";
     };
