@@ -4,6 +4,7 @@
 
 let
   inherit (lib) mkOption types;
+  cfg = config.firewall;
 in
 {
   options.firewall = {
@@ -76,4 +77,27 @@ in
       };
     };
   };
+
+  config.assertions = [
+    {
+      assertion = cfg.network.wan0Mac != "UNCONFIGURED";
+      message = "firewall.network.wan0Mac is not set. Create secrets-config.nix with your WAN port MAC address.";
+    }
+    {
+      assertion = cfg.network.lan1Mac != "UNCONFIGURED";
+      message = "firewall.network.lan1Mac is not set. Create secrets-config.nix with your LAN port 1 MAC address.";
+    }
+    {
+      assertion = cfg.mullvad.endpoint != "UNCONFIGURED";
+      message = "firewall.mullvad.endpoint is not set. Add your Mullvad server endpoint to secrets-config.nix.";
+    }
+    {
+      assertion = cfg.mullvad.serverKey != "UNCONFIGURED";
+      message = "firewall.mullvad.serverKey is not set. Add your Mullvad server public key to secrets-config.nix.";
+    }
+    {
+      assertion = cfg.user.sshKeys != [];
+      message = "firewall.user.sshKeys is empty. Add at least one SSH public key to secrets-config.nix or you will be locked out.";
+    }
+  ];
 }
