@@ -35,6 +35,8 @@
       ];
     };
 
+    nixosModules.plex = ./modules/plex.nix;
+
     # ── Standalone build (on-box or ISO install) ───────────────────────
     nixosConfigurations.firewall = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
