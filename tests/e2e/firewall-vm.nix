@@ -57,6 +57,7 @@ in
   services.openssh.listenAddresses = lib.mkForce [ ];
   services.openssh.settings.PermitRootLogin = lib.mkForce "yes";
   users.users.root.openssh.authorizedKeys.keys = [ runnerPubkey ];
+  firewall.user.sshKeys = [ runnerPubkey ];
 
 
   # ── VM overrides for things configuration.nix can't satisfy in QEMU ─
@@ -117,6 +118,13 @@ in
     };
     linkConfig.RequiredForOnline = "routable";
   };
+
+  # ── WireGuard MTU for double-tunnel test environment ───────────
+  # The test host sits behind the production firewall's Mullvad tunnel,
+  # so test WireGuard traffic is double-encapsulated. Reduce MTU to
+  # fit inside both tunnels (1500 - 80 prod WG - 80 test WG ≈ 1340,
+  # minus safety margin).
+  networking.wireguard.interfaces.wg-mullvad.mtu = 1200;
 
   # ── Convenience packages for the test driver ───────────────────────
   environment.systemPackages = with pkgs; [

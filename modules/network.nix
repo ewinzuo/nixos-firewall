@@ -46,6 +46,13 @@ in
   networking.networkmanager.enable = lib.mkForce false;
   systemd.network.enable = true;
 
+  # Routes and policy rules are managed by WireGuard/Mullvad scripts —
+  # don't let networkd garbage-collect them on DHCP renewals.
+  systemd.network.config.networkConfig = {
+    ManageForeignRoutes = false;
+    ManageForeignRoutingPolicyRules = false;
+  };
+
   # ── Bridge: combine 3 LAN ports into br-lan ─────────────────────────
   systemd.network.netdevs."10-br-lan" = {
     netdevConfig = {

@@ -31,33 +31,23 @@ in
     # We manage routes manually to avoid conflicts with WARP
     allowedIPsAsRoutes = false;
 
-    postSetup = ''
-      # Only set the endpoint route here — the broader routes are installed
-      # by mullvad-routes.service after handshake is confirmed
-      WAN_GW=""
-      for i in $(seq 1 60); do
-        WAN_GW=$(${pkgs.iproute2}/bin/ip route show dev wan0 default | ${pkgs.gawk}/bin/awk '{print $3}')
-        [ -n "$WAN_GW" ] && break
-        sleep 2
-      done
-      if [ -n "$WAN_GW" ]; then
-        ${pkgs.iproute2}/bin/ip route replace ${cfg.endpoint}/32 via "$WAN_GW" dev wan0
-      fi
-    '';
-
     postShutdown = ''
-      ${pkgs.iproute2}/bin/ip route del 0.0.0.0/1 dev wg-mullvad 2>/dev/null || true
-      ${pkgs.iproute2}/bin/ip route del 128.0.0.0/1 dev wg-mullvad 2>/dev/null || true
-      ${pkgs.iproute2}/bin/ip route del ${cfg.endpoint}/32 dev wan0 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip route flush table 51820 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip rule del not fwmark 0xca6c table 51820 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip rule del table main suppress_prefixlength 0 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip rule del fwmark 0x100 lookup 100 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip route flush table 100 2>/dev/null || true
     '';
   };
 
-  # Install default routes only after the WireGuard handshake succeeds.
-  # Without this, a failed handshake blackholes all traffic.
+  # Wait for handshake, then install fwmark-based routing.
+  #
+  # fwmark routing (same approach as wg-quick): WireGuard marks its
+  # own transport packets → policy rule skips the tunnel table →
+  # packets use the default route via wan0. No explicit endpoint
+  # route needed, survives any gateway change.
   systemd.services.mullvad-routes = {
-    description = "Install Mullvad default routes after handshake";
+    description = "Install Mullvad fwmark routing after handshake";
     after = [ "wireguard-wg-mullvad.service" ];
     requires = [ "wireguard-wg-mullvad.service" ];
     wantedBy = [ "multi-user.target" ];
@@ -74,9 +64,13 @@ in
       for i in $(seq 1 60); do
         HS=$(wg show wg-mullvad latest-handshakes 2>/dev/null | awk '{print $2}')
         if [ -n "$HS" ] && [ "$HS" != "0" ]; then
-          echo "Handshake confirmed, installing routes"
-          ip route replace 0.0.0.0/1 dev wg-mullvad
-          ip route replace 128.0.0.0/1 dev wg-mullvad
+          echo "Handshake confirmed, installing fwmark routing"
+
+          wg set wg-mullvad fwmark 0xca6c
+          ip route replace 0.0.0.0/1 dev wg-mullvad table 51820
+          ip route replace 128.0.0.0/1 dev wg-mullvad table 51820
+          ip rule add not fwmark 0xca6c table 51820 2>/dev/null || true
+          ip rule add table main suppress_prefixlength 0 2>/dev/null || true
 
           # Split routing: non-web LAN traffic (fwmark 0x100) → Mullvad directly
           ip rule add fwmark 0x100 lookup 100 priority 100 2>/dev/null || true
@@ -100,33 +94,4 @@ in
     bindsTo = [ "wireguard-wg-mullvad.service" ];
   };
 
-  # Exclude the Mullvad endpoint from WARP's split tunnel so WARP's
-  # firewall doesn't block WireGuard traffic.  This is persisted in
-  # WARP's config (/var/lib/cloudflare-warp/) and survives reconnects.
-  systemd.services.warp-exclude-mullvad = {
-    description = "Exclude Mullvad endpoint from WARP split tunnel";
-    after = [ "cloudflare-warp.service" ];
-    wants = [ "cloudflare-warp.service" ];
-    wantedBy = [ "multi-user.target" ];
-
-    path = with pkgs; [ cloudflare-warp ];
-
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-    };
-
-    script = ''
-      # Wait for WARP daemon to be ready
-      for i in $(seq 1 30); do
-        if warp-cli status &>/dev/null; then
-          break
-        fi
-        sleep 1
-      done
-      # Add Mullvad endpoint to exclude list (idempotent — WARP ignores dupes)
-      warp-cli tunnel ip add ${cfg.endpoint} || true
-      echo "Mullvad endpoint ${cfg.endpoint} excluded from WARP split tunnel"
-    '';
-  };
 }

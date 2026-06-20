@@ -45,7 +45,7 @@ SECRETS_ENC="$HERE/secrets/mullvad.yaml"
 SECRETS_DEC="$RUNTIME/mullvad.json"
 RUNNER_KEY="$RUNTIME/runner-key"
 RUNNER_KEY_PUB="$RUNNER_KEY.pub"
-DRIVER="$HERE/test-driver.sh"
+DRIVER="${E2E_DRIVER:-$HERE/test-driver.sh}"
 
 mkdir -p "$RUNTIME" "$LOGS"
 

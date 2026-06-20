@@ -8,8 +8,9 @@
 #   5. LAN traffic (10.0.0.0/8, etc.) is excluded from the tunnel automatically
 #   6. nftables kill switch on wan0 blocks web traffic as defense-in-depth
 #
-# Split tunnel: warp-svc excludes RFC1918 by default. To exclude additional
-# IPs from WARP (e.g., gaming servers), use:
+# Split tunnel: warp-svc excludes RFC1918 by default. Additional IPs
+# (Mullvad endpoint, DNS upstreams) are excluded by warp-split-tunnel.service
+# so they route through Mullvad instead. To exclude more IPs manually:
 #   warp-cli tunnel ip add <CIDR>
 #
 # Setup (run once on the deployed box):
@@ -30,21 +31,56 @@
 
   nixpkgs.config.allowUnfree = true;  # cloudflare-warp is unfree
 
-  # ── Allow LAN through WARP's nftables kill switch ───────────────────
-  # WARP installs `table inet cloudflare-warp` with policy drop on input
-  # and output, blocking LAN services (SSH, DNS, DHCP, ping) when WARP is
-  # disconnected.  We inject br-lan accept rules so local management always
-  # works.  WARP reloads its firewall on connectivity changes, so we use
-  # `nft monitor` to re-inject immediately.
-  # Note: Mullvad endpoint traffic is handled by WARP's split tunnel
-  # exclude list (see mullvad.nix), not by nftables injection.
-  systemd.services.warp-lan-access = {
-    description = "Allow LAN through WARP nftables kill switch";
+  # ── Split tunnel: exclude IPs that must bypass WARP ─────────────────
+  # Mullvad endpoint must bypass WARP so WireGuard packets reach the
+  # server directly. DNS upstreams (Quad9) must bypass WARP so that a
+  # WARP outage doesn't kill DNS — without DNS, WARP can't recover
+  # (circular dependency). Excluded IPs route through Mullvad instead.
+  systemd.services.warp-split-tunnel = {
+    description = "Exclude Mullvad + DNS IPs from WARP split tunnel";
     after = [ "cloudflare-warp.service" ];
     wants = [ "cloudflare-warp.service" ];
     wantedBy = [ "multi-user.target" ];
 
-    path = [ pkgs.nftables pkgs.gnugrep pkgs.coreutils ];
+    path = with pkgs; [ cloudflare-warp ];
+
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+
+    script = ''
+      for i in $(seq 1 30); do
+        if warp-cli status &>/dev/null; then
+          break
+        fi
+        sleep 1
+      done
+      # Mullvad endpoint — so WireGuard packets reach the server
+      warp-cli tunnel ip add ${config.firewall.mullvad.endpoint} || true
+      # Quad9 DNS upstreams — so DNS works even when WARP is down
+      warp-cli tunnel ip add 9.9.9.11 || true
+      warp-cli tunnel ip add 149.112.112.11 || true
+      echo "Split tunnel exclusions applied"
+    '';
+  };
+
+  # ── Remove WARP's redundant nftables kill switch ────────────────────
+  # WARP installs `table inet cloudflare-warp` with policy drop on input
+  # and output.  This is redundant — our nftables in firewall.nix already
+  # block br-lan→wan0 forwarding and restrict wan0 output to WireGuard+DHCP.
+  # Worse, WARP reloads this table on connectivity changes (WAN carrier
+  # drop, tunnel reconnect), which locks out LAN management (SSH, DNS,
+  # DHCP).  Injecting rules into WARP's table doesn't survive these
+  # reloads reliably.  Instead, delete the table entirely and let our
+  # own kill switch handle it.
+  systemd.services.warp-lan-access = {
+    description = "Remove WARP redundant nftables kill switch";
+    after = [ "cloudflare-warp.service" ];
+    wants = [ "cloudflare-warp.service" ];
+    wantedBy = [ "multi-user.target" ];
+
+    path = [ pkgs.nftables pkgs.coreutils ];
 
     serviceConfig = {
       Type = "simple";
@@ -53,24 +89,14 @@
     };
 
     script = ''
-      inject() {
-        if nft list table inet cloudflare-warp &>/dev/null; then
-          if ! nft list chain inet cloudflare-warp input 2>/dev/null | grep -q 'comment "nixos-override"'; then
-            # Allow LAN management traffic (SSH, DNS, DHCP, ping)
-            nft insert rule inet cloudflare-warp input iifname "br-lan" accept comment \"nixos-override\"
-            nft insert rule inet cloudflare-warp output oifname "br-lan" accept comment \"nixos-override\"
-            echo "Injected LAN accept rules into cloudflare-warp table"
-          fi
-        fi
-      }
+      nft delete table inet cloudflare-warp 2>/dev/null || true
 
-      # Inject on startup
-      inject
-
-      # Re-inject whenever WARP reloads its rules
       nft monitor | while read -r line; do
         case "$line" in
-          *cloudflare-warp*) inject ;;
+          *cloudflare-warp*)
+            sleep 1
+            nft delete table inet cloudflare-warp 2>/dev/null || true
+            ;;
         esac
       done
     '';
