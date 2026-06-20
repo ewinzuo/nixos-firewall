@@ -159,8 +159,9 @@ age-keygen -o ~/.config/sops/age/keys.txt
 sops tests/e2e/secrets/mullvad.yaml
 
 # Run (first run ~10min, reruns ~8min)
-nix shell nixpkgs#sops
-./tests/e2e/run-e2e.sh
+nix shell nixpkgs#nodejs_22 nixpkgs#sops
+cd tests/e2e && npm install
+node run-e2e.mjs
 ```
 
 ## License

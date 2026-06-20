@@ -205,7 +205,9 @@
       in {
         type = "app";
         program = toString (pkgs.writeShellScript "run-e2e-test" ''
-          exec ${toString ./tests/e2e/run-e2e.sh} "$@"
+          cd "${toString ./tests/e2e}"
+          [ -d node_modules ] || ${pkgs.nodejs_22}/bin/npm install --prefer-offline
+          exec ${pkgs.nodejs_22}/bin/node run-e2e.mjs "$@"
         '');
       };
   };

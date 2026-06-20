@@ -1,0 +1,4 @@
+timeout: 600000
+slow: 30000
+reporter: spec
+exit: true

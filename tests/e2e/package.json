@@ -1,0 +1,15 @@
+{
+  "name": "nixos-firewall-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "mocha --reporter spec --reporter-option reportDir=.runtime 'e2e.test.mjs'",
+    "e2e": "node run-e2e.mjs",
+    "stability": "node run-stability.mjs"
+  },
+  "dependencies": {
+    "mocha": "^11.0.0",
+    "mocha-junit-reporter": "^2.2.0",
+    "zx": "^8.0.0"
+  }
+}
