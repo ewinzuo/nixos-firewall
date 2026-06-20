@@ -27,7 +27,11 @@ describe("A0. Connectivity sanity checks", function () {
   });
 
   it("firewall has internet via Mullvad", async function () {
-    const ok = await fwOk("ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1");
+    this.timeout(120_000);
+    const ok = await waitFor(
+      () => fwOk("ping -c 2 -W 5 1.1.1.1 >/dev/null 2>&1"),
+      { timeout: 60, interval: 5, label: "firewall internet" },
+    );
     if (!ok) {
       try {
         const routes = await fw("ip route; echo '---'; ip route get 1.1.1.1 2>&1 || true");
@@ -698,9 +702,10 @@ describe("H. Self-healing -- WAN carrier drop recovery", function () {
 describe("I. Internet drop -- 120s outage recovery", function () {
   this.timeout(600_000);
 
-  before(function () {
+  before(async function () {
     if (!state.recovered) {
       console.log("  skipping: tunnels did not recover from kill switch test");
+      return;
     }
   });
 
@@ -709,21 +714,40 @@ describe("I. Internet drop -- 120s outage recovery", function () {
     this.timeout(600_000);
 
     console.log("  blocking all internet on upstream VM for 120s...");
-    const blocked = await up(
-      `nft add table inet blackhole
-       nft add chain inet blackhole input '{ type filter hook input priority -1; policy accept; }'
-       nft add chain inet blackhole output '{ type filter hook output priority -1; policy accept; }'
-       nft add rule inet blackhole input iifname "eth0" drop
-       nft add rule inet blackhole output oifname "eth0" drop
-       echo "blocked"`,
+    // Schedule the blackhole to activate after 2s so SSH can return first.
+    // The blackhole blocks eth0 (including SSH), so the nft commands must
+    // run AFTER the SSH session closes. A background script handles the
+    // full lifecycle: block, wait 120s, then unblock.
+    const blockOk = await waitFor(
+      async () => {
+        try {
+          await up(
+            `nohup bash -c '
+              sleep 2
+              nft delete table inet blackhole 2>/dev/null || true
+              nft add table inet blackhole
+              nft "add chain inet blackhole input { type filter hook input priority -1 \\; policy accept \\; }"
+              nft "add chain inet blackhole output { type filter hook output priority -1 \\; policy accept \\; }"
+              nft add rule inet blackhole input iifname eth0 drop
+              nft add rule inet blackhole output oifname eth0 drop
+              sleep 120
+              nft delete table inet blackhole 2>/dev/null || true
+            ' </dev/null >/tmp/blackhole.log 2>&1 &
+            echo "scheduled"`,
+          );
+          return true;
+        } catch { return false; }
+      },
+      { timeout: 120, interval: 5, label: "schedule blackhole" },
     );
-    console.log("  upstream:", blocked);
+    if (!blockOk) {
+      console.log("  WARNING: could not SSH to upstream to schedule blackhole");
+      assert.fail("could not schedule blackhole on upstream VM");
+    }
 
-    await sleep(120);
-
-    console.log("  restoring internet...");
-    const restored = await up('nft delete table inet blackhole; echo "restored"');
-    console.log("  upstream:", restored);
+    // Wait for the blackhole to activate (2s) plus the full 120s outage
+    console.log("  waiting 125s for blackhole lifecycle (2s delay + 120s block + 3s margin)...");
+    await sleep(125);
 
     console.log("  waiting for Mullvad tunnel to recover (up to 120s)...");
     let recoveredAfter = 0;

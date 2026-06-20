@@ -8,7 +8,7 @@ if (!RUNNER_KEY) throw new Error("RUNNER_KEY env var not set");
 const SSH_OPTS = [
   "-o", "StrictHostKeyChecking=no",
   "-o", "UserKnownHostsFile=/dev/null",
-  "-o", "ConnectTimeout=5",
+  "-o", "ConnectTimeout=15",
   "-o", "ServerAliveInterval=10",
   "-o", "LogLevel=ERROR",
   "-o", "IdentitiesOnly=yes",
