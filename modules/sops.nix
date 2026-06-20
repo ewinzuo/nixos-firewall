@@ -13,8 +13,6 @@
 { config, lib, ... }:
 
 {
-  sops.defaultSopsFile = ../secrets/mullvad.yaml;
-
   # Derive the age key from the host's SSH ed25519 key — no separate
   # key file to manage, rotate, or lose.
   sops.age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
