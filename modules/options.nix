@@ -49,6 +49,12 @@ in
       };
     };
 
+    wanAllowedTCPPorts = mkOption {
+      type = types.listOf types.port;
+      default = [];
+      description = "TCP ports to allow inbound on wan0.";
+    };
+
     mullvad = {
       endpoint = mkOption {
         type = types.str;

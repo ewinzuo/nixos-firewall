@@ -11,6 +11,10 @@
 #   - IPv6 forwarding blocked (NAT/WARP are IPv4-only)
 { config, lib, pkgs, ... }:
 
+let
+  wanTcp = config.firewall.wanAllowedTCPPorts;
+  fmtPorts = ports: lib.concatMapStringsSep ", " toString ports;
+in
 {
   # Disable NixOS's built-in iptables firewall — we use raw nftables
   networking.firewall.enable = false;
@@ -216,6 +220,8 @@
 
           # DHCP client (for WAN DHCP)
           udp sport 67 udp dport 68 accept
+
+          ${lib.optionalString (wanTcp != []) "tcp dport { ${fmtPorts wanTcp} } accept"}
 
           # Everything else on WAN: drop (default deny)
           drop
