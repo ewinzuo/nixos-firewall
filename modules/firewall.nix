@@ -279,6 +279,14 @@ in
           iifname "br-lan" tcp dport { 80, 443 } meta mark set 0x0
           iifname "br-lan" udp dport 443 meta mark set 0x0
         }
+
+        # Locally-generated traffic bypasses WARP — only forwarded LAN
+        # client traffic should go through the WARP tunnel. Skip packets
+        # already marked by WireGuard (0xca6c) to avoid routing loops.
+        chain output {
+          type route hook output priority mangle; policy accept;
+          meta mark != 0xca6c meta mark set 0x100cf
+        }
       }
     '';
   };
