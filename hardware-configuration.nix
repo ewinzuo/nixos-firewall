@@ -41,8 +41,7 @@
     lib.mkDefault config.hardware.enableRedistributableFirmware;
 
   boot.kernelParams = [
-    # Headless — skip GPU initialization
-    "nomodeset"
+    "loglevel=4"
   ];
 
   # Distribute NIC interrupts across all cores
