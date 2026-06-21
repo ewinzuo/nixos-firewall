@@ -30,11 +30,13 @@ pkgs.testers.nixosTest {
         ../modules/network.nix
         ../modules/firewall.nix
         ../modules/dhcp-dns.nix
-        # warp.nix / mullvad.nix not imported — they need live internet.
-        # The CloudflareWARP / wg-mullvad interfaces simply don't exist;
-        # the production kill switch (drop br-lan → wan0) makes the
-        # missing tunnels visible by blocking all forwarded traffic.
       ];
+
+      firewall.network.wan0Mac = "52:54:00:00:00:01";
+      firewall.network.lan1Mac = "52:54:00:00:00:02";
+      firewall.mullvad.endpoint = "198.51.100.1";
+      firewall.mullvad.serverKey = "dGVzdC1rZXktbm90LXJlYWw=";
+      firewall.user.sshKeys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyNotReal test@test" ];
 
       # In NixOS test VMs eth0 is the management interface, and
       # `vlans = [ 1 2 ]` brings up eth1 (vlan1) and eth2 (vlan2).

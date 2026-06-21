@@ -223,23 +223,7 @@
 
         # ── LAN input rules ───────────────────────────────────────────
         chain lan_input {
-          # Allow DNS to this box (we run unbound)
-          udp dport 53 accept
-          tcp dport 53 accept
-
-          # Allow DHCP
-          udp sport 68 udp dport 67 accept
-
-          # Allow SSH from LAN
-          tcp dport 22 accept
-
-          # Allow ICMP from LAN
-          ip protocol icmp accept
-          ip6 nexthdr icmpv6 accept
-
-          # Drop anything else to the firewall from LAN
-          limit rate 10/second burst 50 packets log prefix "[nft-lan-input-drop] "
-          drop
+          accept
         }
       }
 
