@@ -266,10 +266,20 @@ in
       # LAN web (HTTP/HTTPS/QUIC) → WARP (→ Mullvad underlay → Internet)
       # LAN everything else       → Mullvad directly
       # Host (locally-generated)  → Mullvad
-      # Marks:
-      #   0x0      → WARP    (ip rule pri ~99:  not fwmark 0x100cf → table 65743)
-      #   0x100cf  → Mullvad (ip rule pri ~32765: not fwmark 0xca6c → table 51820)
-      #   0xca6c   → bypass both (set by wg-quick for its own underlay)
+      #
+      # Convention used by both wg-quick and warp-svc: a tunnel's bypass
+      # fwmark equals the tunnel's own routing table number. The ip rule
+      # they install reads "not fwmark <TABLE> lookup <TABLE>" — i.e., a
+      # packet marked with the table's own number SKIPS that table.
+      #
+      #   mark    | dec    | meaning
+      #   --------|--------|-----------------------------------------------
+      #   0x0     |      0 | route via WARP    (table 65743, pri ~99)
+      #   0x100cf |  65743 | skip WARP → falls to Mullvad (table 51820, pri ~32765)
+      #   0xca6c  |  51820 | skip Mullvad → falls to main (bare WAN). Set by
+      #                    | wg-quick on its own UDP underlay packets so they
+      #                    | don't loop back into wg-mullvad.
+      #
       # Only packets FROM br-lan are marked — reply packets arrive on
       # wg-mullvad/CloudflareWARP and stay unmarked so they route normally
       # back to the LAN client (conntrack handles return path).
