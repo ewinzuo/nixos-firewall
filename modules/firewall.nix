@@ -263,26 +263,26 @@ in
 
 
       # ── Split routing ─────────────────────────────────────────────────
-      # Web traffic (HTTP/HTTPS/QUIC) → CloudflareWARP → Mullvad → Internet
-      # Everything else (gaming, etc.) → Mullvad directly (higher MTU)
+      # LAN web (HTTP/HTTPS/QUIC) → WARP (→ Mullvad underlay → Internet)
+      # LAN everything else       → Mullvad directly
+      # Host (locally-generated)  → Mullvad
+      # Marks:
+      #   0x0      → WARP    (ip rule pri ~99:  not fwmark 0x100cf → table 65743)
+      #   0x100cf  → Mullvad (ip rule pri ~32765: not fwmark 0xca6c → table 51820)
+      #   0xca6c   → bypass both (set by wg-quick for its own underlay)
+      # Only packets FROM br-lan are marked — reply packets arrive on
+      # wg-mullvad/CloudflareWARP and stay unmarked so they route normally
+      # back to the LAN client (conntrack handles return path).
       table inet mangle {
         chain prerouting {
           type filter hook prerouting priority mangle; policy accept;
-
-          # Split routing: web → WARP, everything else → Mullvad directly.
-          # Only packets FROM br-lan are marked — reply packets arrive on
-          # wg-mullvad/CloudflareWARP and stay unmarked so they route
-          # normally back to the LAN client.
-          iifname "br-lan" meta mark set 0x100
-
-          # Web traffic: let WARP handle it (clear mark)
-          iifname "br-lan" tcp dport { 80, 443 } meta mark set 0x0
-          iifname "br-lan" udp dport 443 meta mark set 0x0
+          iifname "br-lan" meta mark set 0x100cf                          # LAN default → Mullvad
+          iifname "br-lan" tcp dport { 80, 443 } meta mark set 0x0        # LAN web    → WARP
+          iifname "br-lan" udp dport 443 meta mark set 0x0                # LAN QUIC   → WARP
         }
 
-        # Locally-generated traffic bypasses WARP — only forwarded LAN
-        # client traffic should go through the WARP tunnel. Skip packets
-        # already marked by WireGuard (0xca6c) to avoid routing loops.
+        # Locally-generated traffic → Mullvad. Skip packets already marked
+        # by WireGuard (0xca6c) to avoid routing loops back into wg-mullvad.
         chain output {
           type route hook output priority mangle; policy accept;
           meta mark != 0xca6c meta mark set 0x100cf
