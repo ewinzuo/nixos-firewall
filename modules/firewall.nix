@@ -1,14 +1,19 @@
 # nftables firewall — OPNSense-equivalent default ruleset.
 #
-# Design goals (matching OPNSense defaults):
+# Design goals:
 #   - Default deny inbound on WAN
-#   - Allow all outbound from LAN (non-web via WAN, web via WARP)
+#   - Default deny "leak" on wan0 outbound (kill switch). Only WireGuard
+#     underlay + DHCP + ICMP allowed bare; everything else must go through
+#     a VPN (Mullvad) or be explicitly marked (fwmark 0xca6c) for bare-WAN
+#   - LAN traffic routes through Mullvad (wg-mullvad) by default
+#   - WARP runs in its own network namespace (see modules/warp.nix). The
+#     CloudflareWARP interface does NOT exist in main netns; services that
+#     need WARP opt in by setting NetworkNamespacePath=/run/netns/warp
 #   - Stateful connection tracking (allow established/related)
 #   - Anti-spoof on WAN (bogon sets for v4 + v6)
 #   - ICMP/ICMPv6 rate limiting
-#   - Kill switch: web traffic dropped if WARP tunnel is down
-#   - NAT (masquerade) for LAN → WAN and LAN → WARP
-#   - IPv6 forwarding blocked (NAT/WARP are IPv4-only)
+#   - NAT (masquerade) for LAN → WAN and LAN → wg-mullvad
+#   - IPv6 forwarding blocked (NAT and tunnels are IPv4-only)
 { config, lib, pkgs, ... }:
 
 let
@@ -164,19 +169,20 @@ in
           iifname "br-lan" oifname "br-lan" accept
 
           # ── Kill switch: LAN traffic must not leave unencrypted ──
-          # Block bare WAN so no traffic leaks without VPN protection.
-          # wg-mullvad is allowed — it's a VPN tunnel, not a leak.  WARP
-          # excludes some IPs from its tunnel (Apple, etc.) and during any
-          # WARP reconnect all traffic briefly falls through to wg-mullvad
-          # via the main routing table.  Blocking it would blackhole LAN.
+          # Block bare WAN so no LAN traffic leaks without VPN protection.
+          # wg-mullvad is the LAN's default VPN egress. CloudflareWARP is
+          # NOT in this netns (it lives in /run/netns/warp); services that
+          # want WARP join warpns explicitly.
           iifname "br-lan" oifname "wan0" limit rate 10/second burst 50 packets log prefix "[nft-warp-leak] "
           iifname "br-lan" oifname "wan0" drop
 
-          # LAN → Mullvad: VPN-protected fallback
+          # LAN → Mullvad: default VPN-protected egress for LAN clients
           iifname "br-lan" oifname "wg-mullvad" accept
 
-          # LAN → WARP: all internet traffic
-          iifname "br-lan" oifname "CloudflareWARP" accept
+          # (CloudflareWARP interface is in warpns now — no rule needed
+          # here. Services join warpns via NetworkNamespacePath. Cross-
+          # netns forwarding rules for warp-bootstrap traffic live in
+          # warp.nix's setup-warp-netns service.)
 
           limit rate 10/second burst 50 packets log prefix "[nft-forward-drop] "
           drop
@@ -262,33 +268,39 @@ in
       }
 
 
-      # ── Split routing ─────────────────────────────────────────────────
-      # LAN web (HTTP/HTTPS/QUIC) → WARP (→ Mullvad underlay → Internet)
-      # LAN everything else       → Mullvad directly
-      # Host (locally-generated)  → Mullvad
+      # ── Split routing via fwmark ──────────────────────────────────────
+      # LAN web (HTTP/HTTPS/QUIC) → WARP (in /run/netns/warp via veth)
+      # LAN everything else       → Mullvad
+      # Host (locally-generated)  → Mullvad (unless marked otherwise)
+      # Plex (skuid plex)         → bare wan0 (handled in ewin-firewall)
       #
-      # Convention used by both wg-quick and warp-svc: a tunnel's bypass
-      # fwmark equals the tunnel's own routing table number. The ip rule
-      # they install reads "not fwmark <TABLE> lookup <TABLE>" — i.e., a
-      # packet marked with the table's own number SKIPS that table.
+      # Mark catalog:
+      #   mark    | dec    | purpose
+      #   --------|--------|---------------------------------------------
+      #   0x100   |    256 | "split-routing": go via Mullvad directly
+      #                    | (rule pri 100; route table 100 = wg-mullvad)
+      #   0xc100  |  49408 | "send to warp netns": ip rule pri 6 routes
+      #                    | to table 60 → veth-warp-h → WARP captures
+      #                    | (installed in warp.nix's setup-warp-netns)
+      #   0xc0de  |  49374 | "plex bare-WAN bypass": ip rule pri 5 →
+      #                    | main table (installed in ewin-firewall)
+      #   0xca6c  |  51820 | Mullvad bypass (set by wg-quick on its UDP
+      #                    | underlay — also matches the priority-32760
+      #                    | rule "not fwmark 0xca6c → mullvad")
+      #   0x100cf |  65743 | Legacy/no-op: was WARP-skip before WARP
+      #                    | moved to its own netns. Kept as the default
+      #                    | mark for LAN traffic so the rule chain
+      #                    | catches it predictably via priority 32760.
       #
-      #   mark    | dec    | meaning
-      #   --------|--------|-----------------------------------------------
-      #   0x0     |      0 | route via WARP    (table 65743, pri ~99)
-      #   0x100cf |  65743 | skip WARP → falls to Mullvad (table 51820, pri ~32765)
-      #   0xca6c  |  51820 | skip Mullvad → falls to main (bare WAN). Set by
-      #                    | wg-quick on its own UDP underlay packets so they
-      #                    | don't loop back into wg-mullvad.
-      #
-      # Only packets FROM br-lan are marked — reply packets arrive on
-      # wg-mullvad/CloudflareWARP and stay unmarked so they route normally
-      # back to the LAN client (conntrack handles return path).
+      # Only packets FROM br-lan are marked here — reply packets arrive on
+      # wg-mullvad/CloudflareWARP/veth-warp-h and stay unmarked so they
+      # route normally back to the LAN client (conntrack handles return).
       table inet mangle {
         chain prerouting {
           type filter hook prerouting priority mangle; policy accept;
-          iifname "br-lan" meta mark set 0x100cf                          # LAN default → Mullvad
-          iifname "br-lan" tcp dport { 80, 443 } meta mark set 0x0        # LAN web    → WARP
-          iifname "br-lan" udp dport 443 meta mark set 0x0                # LAN QUIC   → WARP
+          iifname "br-lan" meta mark set 0x100cf                            # LAN default → Mullvad
+          iifname "br-lan" tcp dport { 80, 443 } meta mark set 0xc100       # LAN web    → warpns
+          iifname "br-lan" udp dport 443 meta mark set 0xc100               # LAN QUIC   → warpns
         }
 
         # Locally-generated traffic → Mullvad. Skip packets already marked

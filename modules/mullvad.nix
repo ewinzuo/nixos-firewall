@@ -33,8 +33,8 @@ in
 
     postShutdown = ''
       ${pkgs.iproute2}/bin/ip route flush table 51820 2>/dev/null || true
-      ${pkgs.iproute2}/bin/ip rule del not fwmark 0xca6c table 51820 2>/dev/null || true
-      ${pkgs.iproute2}/bin/ip rule del table main suppress_prefixlength 0 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip rule del priority 32760 2>/dev/null || true
+      ${pkgs.iproute2}/bin/ip rule del priority 32759 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip rule del fwmark 0x100 lookup 100 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip route flush table 100 2>/dev/null || true
     '';
@@ -69,8 +69,26 @@ in
           wg set wg-mullvad fwmark 0xca6c
           ip route replace 0.0.0.0/1 dev wg-mullvad table 51820
           ip route replace 128.0.0.0/1 dev wg-mullvad table 51820
-          ip rule add not fwmark 0xca6c table 51820 2>/dev/null || true
-          ip rule add table main suppress_prefixlength 0 2>/dev/null || true
+
+          # Pin EXPLICIT priorities so the rule layout is deterministic
+          # regardless of which service starts first. The system's rule
+          # priority map (current convention):
+          #     5 → plex bare-WAN bypass (fwmark 0xc0de)
+          #     6 → LAN web → warp netns (fwmark 0xc100)  -- see warp.nix
+          #   100 → split-routing: marked LAN → Mullvad (fwmark 0x100)
+          # 32759 → main suppress_prefixlength 0  (LAN-local destinations)
+          # 32760 → not fwmark 0xca6c → Mullvad   (default catch-all)
+          # 32766 → from all lookup main          (system default)
+          # 32767 → from all lookup default       (system default)
+          #
+          # iproute2 auto-assigns to the lowest unused slot (typically the
+          # 30000s) but the exact value drifts based on boot order. Pinning
+          # these here makes them stable across reboots/rebuilds and rules
+          # out any "service X racing service Y" failure mode.
+          ip rule del priority 32760 2>/dev/null || true
+          ip rule del priority 32759 2>/dev/null || true
+          ip rule add not fwmark 0xca6c table 51820 priority 32760
+          ip rule add table main suppress_prefixlength 0 priority 32759
 
           # Split routing: non-web LAN traffic (fwmark 0x100) → Mullvad directly
           ip rule add fwmark 0x100 lookup 100 priority 100 2>/dev/null || true

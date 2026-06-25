@@ -24,6 +24,23 @@ export async function fw(cmd) {
   return r.stdout.trim();
 }
 
+// Run a command inside the WARP network namespace (where warp-svc lives).
+// Used for: warp-cli commands (which talk to the daemon's local socket),
+// `ip link show CloudflareWARP` (interface lives in warpns), and any
+// curl/ping that should egress through the WARP tunnel.
+export async function fwWarp(cmd) {
+  return fw(`ip netns exec warp sh -c ${JSON.stringify(cmd)}`);
+}
+
+export async function fwWarpOk(cmd) {
+  try {
+    await fwWarp(cmd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function cl(cmd) {
   const r = await $`ssh ${SSH_OPTS} -p 2223 root@127.0.0.1 ${cmd}`;
   return r.stdout.trim();

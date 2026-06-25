@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { fw, cl, up, fwOk, clOk, upOk, sleep, waitFor } from "./helpers.mjs";
+import { fw, cl, up, fwOk, clOk, upOk, fwWarp, fwWarpOk, sleep, waitFor } from "./helpers.mjs";
 
 // Shared state flags across phases
 const state = {
@@ -108,8 +108,11 @@ describe("A. Bootstrap WARP on the firewall", function () {
   this.timeout(300_000);
 
   before(async function () {
-    console.log("  registering and connecting WARP...");
+    console.log("  registering and connecting WARP (inside warp netns)...");
     try {
+      // warp-svc lives in /run/netns/warp post-refactor. The system's
+      // /run/current-system/sw/bin/warp-cli is a wrapper that auto-prefixes
+      // `ip netns exec warp` so a root shell can use it transparently.
       await fw(`set -ex
         systemctl is-active --quiet cloudflare-warp || systemctl start cloudflare-warp
         for i in $(seq 1 30); do
@@ -148,19 +151,43 @@ describe("A. Bootstrap WARP on the firewall", function () {
     }
   });
 
-  it("CloudflareWARP interface is up", async function () {
+  it("CloudflareWARP interface is up (inside warp netns)", async function () {
     const up = await waitFor(
-      () => fwOk("ip link show CloudflareWARP >/dev/null 2>&1"),
+      () => fwOk("ip -n warp link show CloudflareWARP >/dev/null 2>&1"),
       { timeout: 120, interval: 2, label: "CloudflareWARP interface" },
     );
     if (!up) {
       try {
-        const status = await fw("warp-cli --accept-tos status 2>&1 || true");
+        const status = await fwWarp("warp-cli --accept-tos status 2>&1 || true");
         console.log("  warp-cli status:", status);
       } catch { /* best effort */ }
     }
     state.warpUp = up;
-    assert.ok(up, "CloudflareWARP interface never appeared");
+    assert.ok(up, "CloudflareWARP interface never appeared in warp netns");
+  });
+
+  it("WARP daemon process is in /run/netns/warp", async function () {
+    if (!state.warpUp) return this.skip();
+    // Verify warp-svc is actually scoped to the warp netns.
+    const sameNs = await fwOk(`
+      WARP_PID=$(pidof warp-svc | awk '{print $1}')
+      [ -n "$WARP_PID" ] || exit 1
+      WARP_NS=$(readlink /proc/$WARP_PID/ns/net)
+      WARPNS_NS=$(readlink /run/netns/warp 2>/dev/null || ip netns identify $WARP_PID 2>/dev/null)
+      # readlink of /run/netns/warp gives the nsfs inode reference; either
+      # value-matching or netns-identify confirms the daemon is in warpns.
+      [ "$WARP_NS" = "$WARPNS_NS" ] || ip netns identify $WARP_PID | grep -q '^warp$'
+    `);
+    assert.ok(sameNs, "warp-svc is not running in /run/netns/warp");
+  });
+
+  it("WARP rules confined to warp netns (main is clean)", async function () {
+    if (!state.warpUp) return this.skip();
+    // Priority-7 'not fwmark 0x100cf lookup 65743' should ONLY exist in warpns.
+    const mainHasWarp = await fwOk("ip rule list | grep -q '65743'");
+    const warpHasWarp = await fwOk("ip -n warp rule list | grep -q '65743'");
+    assert.ok(!mainHasWarp, "WARP ip-rule leaked into main netns — netns isolation broken");
+    assert.ok(warpHasWarp,  "WARP ip-rule missing from warp netns — daemon misconfigured");
   });
 });
 

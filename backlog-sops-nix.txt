@@ -1,0 +1,52 @@
+Title: Adopt sops-nix for production Mullvad private key
+
+Labels: enhancement, security
+
+## Background
+
+The production firewall (`ewin-firewall`) currently stores the Mullvad
+WireGuard private key as plaintext on disk at `/etc/mullvad/private-key`
+(0600 root:root). The key is placed on the box manually before
+`nixos-rebuild --target-host` runs, and survives across reboots on the
+unencrypted rootfs.
+
+This is the standard NixOS WireGuard pattern and the kernel inherently
+needs the raw key at runtime, but there are two practical issues:
+
+1. Disk-at-rest exposure — anyone with physical access to the disk
+   can read the key offline. The box has no LUKS (headless appliance,
+   no operator at boot).
+2. Out-of-band deploy step — the key isn't tracked anywhere, so
+   redeploying to fresh hardware requires manually copying the file.
+   `nixos-rebuild --target-host` is not self-contained.
+
+The e2e test suite already uses sops+age for `tests/e2e/secrets/mullvad.yaml`,
+so the tooling pattern is established in this repo.
+
+## Proposal
+
+Adopt `sops-nix` for the production secret:
+
+1. Add `sops-nix` to `flake.nix` inputs/modules.
+2. Pick a host-bound recipient key — the firewall's SSH ed25519 host key
+   (`/etc/ssh/ssh_host_ed25519_key`) converted to age via `ssh-to-age`.
+3. Add the firewall's age pubkey as a recipient in `.sops.yaml`.
+4. Encrypt the Mullvad private key into `secrets/mullvad-private-key.yaml`
+   (committed).
+5. Configure `sops.secrets."mullvad-private-key"` to decrypt to a tmpfs
+   path under `/run/secrets/`.
+6. Update `modules/mullvad.nix:22` `privateKeyFile` to point at the
+   sops-managed path.
+7. Document the rotation flow in README.
+
+## Outcome
+
+- Encrypted secret lives in git
+- No at-rest plaintext on disk (tmpfs only)
+- `nixos-rebuild --target-host` becomes self-contained — no manual file copy
+- One-time setup per firewall: extract host key → age pubkey → re-encrypt
+
+## Out of scope
+
+- LUKS on rootfs (separate decision; meaningful only with operator-at-boot)
+- Encrypting the WARP registration token (low value, easily re-registered)
