@@ -175,21 +175,32 @@ in
       ip rule del fwmark 0xc100 lookup 60 priority 6 2>/dev/null || true
       ip rule add fwmark 0xc100 lookup 60 priority 6
 
-      # ── NAT inside warpns: rewrite forwarded packet sources to the WARP
-      # ── interface's own IP before they enter the MASQUE tunnel ────────
-      # When WARP daemon's own traffic egresses, the kernel naturally
-      # assigns source = CloudflareWARP's IP (it's a /32 on that
-      # interface). But forwarded LAN packets arrive in warpns with source
-      # = 10.99.1.1 (the host veth IP, set by our masquerade in main).
-      # The MASQUE server at Cloudflare can't route private IPs back, so
-      # replies never arrive. Masquerading at the CloudflareWARP egress
-      # rewrites source → 172.16.0.2 (WARP-assigned), and conntrack
-      # reverses on the reply path back to the LAN client.
+      # ── Inside-warpns rules: NAT + MSS clamp on CloudflareWARP egress ─
+      #
+      # NAT (postrouting/nat): WARP daemon's own traffic naturally gets
+      # source = CloudflareWARP's /32 IP. But forwarded LAN packets arrive
+      # in warpns with source = 10.99.1.1 (the host veth IP, set by main
+      # netns's masquerade). Cloudflare's MASQUE server can't route a
+      # private 10.x source back, so replies vanish. Masquerade at the
+      # CloudflareWARP egress rewrites source → the WARP-assigned IP, and
+      # conntrack reverses on the reply path back to the LAN client.
+      #
+      # MSS clamp (postrouting/mangle): CloudflareWARP MTU is 1280. A
+      # plain rt-mtu clamp on the veth path sees the veth's 1500 MTU, not
+      # the tunnel's 1280 — useless. Clamping on oifname CloudflareWARP
+      # uses a fixed MSS sized for the smaller of v4/v6 paths:
+      #   1280 (tunnel MTU) − 40 (IPv6 hdr) − 20 (TCP hdr) = 1220.
+      # IPv4 traffic is 20 bytes under-budget but it costs nothing; the
+      # `inet` family rule applies to both v4 and v6 forwarded TCP SYNs.
       ip netns exec ${netns} nft -f - <<EOF
       table inet warp-forward-nat {
         chain postrouting {
           type nat hook postrouting priority srcnat; policy accept;
           oifname "CloudflareWARP" masquerade
+        }
+        chain mss-clamp {
+          type filter hook postrouting priority mangle; policy accept;
+          oifname "CloudflareWARP" tcp flags syn / syn,rst tcp option maxseg size set 1220
         }
       }
       EOF
