@@ -174,11 +174,34 @@ in
       ip route add default via ${nsIp} dev ${hostVeth} table 60
       ip rule del fwmark 0xc100 lookup 60 priority 6 2>/dev/null || true
       ip rule add fwmark 0xc100 lookup 60 priority 6
+
+      # ── NAT inside warpns: rewrite forwarded packet sources to the WARP
+      # ── interface's own IP before they enter the MASQUE tunnel ────────
+      # When WARP daemon's own traffic egresses, the kernel naturally
+      # assigns source = CloudflareWARP's IP (it's a /32 on that
+      # interface). But forwarded LAN packets arrive in warpns with source
+      # = 10.99.1.1 (the host veth IP, set by our masquerade in main).
+      # The MASQUE server at Cloudflare can't route private IPs back, so
+      # replies never arrive. Masquerading at the CloudflareWARP egress
+      # rewrites source → 172.16.0.2 (WARP-assigned), and conntrack
+      # reverses on the reply path back to the LAN client.
+      ip netns exec ${netns} nft -f - <<EOF
+      table inet warp-forward-nat {
+        chain postrouting {
+          type nat hook postrouting priority srcnat; policy accept;
+          oifname "CloudflareWARP" masquerade
+        }
+      }
+      EOF
     '';
 
     preStop = ''
       ip rule del fwmark 0xc100 lookup 60 priority 6 2>/dev/null || true
       ip route flush table 60 2>/dev/null || true
+      # Inside-warpns NAT table — deleted automatically when netns goes away,
+      # but explicit cleanup helps if the netns is being kept across restarts.
+      ip netns exec ${netns} nft list table inet warp-forward-nat >/dev/null 2>&1 \
+        && ip netns exec ${netns} nft delete table inet warp-forward-nat || true
       ip link del ${hostVeth} 2>/dev/null || true
       ip netns del ${netns} 2>/dev/null || true
       nft list table inet warp-netns >/dev/null 2>&1 && nft delete table inet warp-netns || true

@@ -219,12 +219,16 @@ const UP_OPTS = [
 function startVm(name, script, workdir, opts, logfile) {
   console.log(`── starting ${name} ─────────────────────────────────────────────`);
 
-  // setsid puts the child in its own process group so we can kill the
-  // entire group (QEMU + wrapper) in cleanup.
+  // detached:true makes Node call setsid() after fork, so the bash we
+  // spawn is itself the session/pgroup leader and proc.pid IS that pgid.
+  // (Wrapping with external `setsid bash ...` doesn't work: setsid forks
+  // and the parent — whose pid Node returns — exits. The real pgid then
+  // belongs to a process we have no handle on, and kill(-proc.pid) gives
+  // ESRCH, silently leaking the QEMU.)
   const proc = spawn(
-    "setsid",
+    "bash",
     [
-      "bash", "-c",
+      "-c",
       `cd "${workdir}" && QEMU_OPTS="${opts}" QEMU_KERNEL_PARAMS="console=ttyS0,115200" "${script}" -nographic >"${logfile}" 2>&1`,
     ],
     {

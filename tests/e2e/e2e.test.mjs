@@ -322,6 +322,57 @@ describe("C. Client connectivity through the double tunnel", function () {
   it("client fetches https://cloudflare.com/cdn-cgi/trace", async function () {
     if (!state.tunnelsOk) return this.skip();
     const ok = await clOk("curl -sf --max-time 15 https://cloudflare.com/cdn-cgi/trace >/tmp/trace.txt");
+    if (!ok) {
+      // Diagnose where the LAN→warpns→WARP path breaks.
+      const diag = async (label, vmFn, cmd) => {
+        try { console.log(`  --- ${label} ---\n${await vmFn(cmd)}`); }
+        catch (e) { console.log(`  --- ${label} --- (err: ${e.message})`); }
+      };
+      console.log("  client fetch failed — diagnosing LAN→warpns path:");
+      await diag("client → can ping firewall?", cl, "ping -c 2 -W 2 192.168.1.1 2>&1");
+      await diag("client → trace.txt size", cl, "ls -la /tmp/trace.txt 2>&1");
+      await diag("fw: ip rule list", fw, "ip rule list");
+      await diag("fw: ip route show table 60 (LAN-web → warpns)", fw, "ip route show table 60 2>&1");
+      await diag("fw: nft mangle prerouting", fw, "nft list chain inet mangle prerouting 2>&1");
+      await diag("fw: forward rules for veth-warp-h", fw,
+        "nft list chain inet filter forward 2>&1 | grep -E 'veth-warp-h|br-lan' | head -10");
+      await diag("fw: warp-netns nat table", fw, "nft list table inet warp-netns 2>&1");
+      await diag("fw: veth-warp-h state", fw, "ip -br addr show veth-warp-h 2>&1");
+      await diag("fw: warpns interfaces", fw, "ip -n warp -br addr 2>&1");
+      await diag("fw: warpns ip rule + route", fw,
+        "ip netns exec warp ip rule list; echo '---'; ip netns exec warp ip route show table 65743 2>&1");
+      await diag("fw: ip_forward inside warpns", fw,
+        "ip netns exec warp sysctl net.ipv4.ip_forward 2>&1");
+      await diag("fw: route lookup from client perspective", fw,
+        "ip route get 1.1.1.1 from 192.168.1.50 iif br-lan mark 0xc100 2>&1");
+      await diag("fw: from warpns, can we reach internet?", fw,
+        "ip netns exec warp curl -sf --max-time 8 -o /dev/null -w 'code=%{http_code} time=%{time_total}s\\n' https://cloudflare.com/cdn-cgi/trace 2>&1");
+      await diag("fw: setup-warp-netns service status + recent logs", fw,
+        "systemctl status setup-warp-netns --no-pager -n 0 2>&1 | head -10; echo '---'; journalctl -u setup-warp-netns --no-pager -n 40 2>&1");
+      await diag("fw: warpns nft tables list", fw,
+        "ip netns exec warp nft list tables 2>&1");
+      await diag("fw: warpns ALL nft ruleset (with counters/handles)", fw,
+        "ip netns exec warp nft -a list ruleset 2>&1");
+      // Active probe: fire client curl in background, then dump conntrack
+      // and packet counters on the forward path to see where packets stop.
+      await diag("active probe: client curl + fw counters", fw,
+        `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            root@192.168.1.50 'curl -s --max-time 6 https://1.1.1.1 -o /dev/null' &
+         sleep 2
+         echo '--- conntrack: br-lan→veth-warp-h flows ---'
+         conntrack -L 2>/dev/null | grep -E '192.168.1.50|10.99.1' | head -10
+         echo '--- conntrack inside warpns ---'
+         ip netns exec warp conntrack -L 2>/dev/null | head -10
+         echo '--- veth-warp-h rx/tx ---'
+         ip -s link show veth-warp-h | tail -4
+         echo '--- veth-warp (inside warpns) rx/tx ---'
+         ip -n warp -s link show veth-warp | tail -4
+         echo '--- CloudflareWARP rx/tx (inside warpns) ---'
+         ip -n warp -s link show CloudflareWARP | tail -4
+         wait`);
+      await diag("client → curl with verbose", cl,
+        "curl -v --max-time 10 https://cloudflare.com/cdn-cgi/trace 2>&1 | head -25");
+    }
     assert.ok(ok, "client could not fetch through the double tunnel");
   });
 });
