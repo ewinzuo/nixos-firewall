@@ -103,8 +103,8 @@ in
           # `set rt mtu` reads the route's actual MTU at SYN time, so this
           # tracks any future Mullvad MTU changes automatically.
           # Discrete `nft add` commands (not heredoc) — heredoc here-docs
-          # break inside Nix '' strings when the closing EOF can't land at
-          # column 0 after common-indent stripping.
+          # break inside Nix indented strings when the closing EOF can't
+          # land at column 0 after common-indent stripping.
           nft delete table inet mullvad-mss 2>/dev/null || true
           nft add table inet mullvad-mss
           nft add chain inet mullvad-mss forward \
