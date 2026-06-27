@@ -52,6 +52,14 @@ in
     "net.ipv4.icmp_ignore_bogus_error_responses" = 1;
     "net.ipv4.tcp_syncookies" = 1;
     "net.ipv4.tcp_rfc1337" = 1;
+    # PMTU probing fallback. When a hop drops oversized packets without
+    # returning ICMP Frag-Needed (common across VPNs, MASQUE, and some
+    # consumer ISPs), TCP would otherwise wait for retransmit timeouts
+    # before stepping the segment size down — symptom: "browser slow,
+    # eventually self-heals." `tcp_mtu_probing=1` makes the kernel probe
+    # smaller MTUs proactively, so the slow-then-heal window collapses
+    # from minutes to a couple of round-trips.
+    "net.ipv4.tcp_mtu_probing" = 1;
 
     # Conntrack tuning — safe defaults for 4GB+ RAM routers
     "net.netfilter.nf_conntrack_max" = 524288;

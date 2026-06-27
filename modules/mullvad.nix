@@ -37,6 +37,7 @@ in
       ${pkgs.iproute2}/bin/ip rule del priority 32759 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip rule del fwmark 0x100 lookup 100 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip route flush table 100 2>/dev/null || true
+      ${pkgs.nftables}/bin/nft delete table inet mullvad-mss 2>/dev/null || true
     '';
   };
 
@@ -52,7 +53,7 @@ in
     requires = [ "wireguard-wg-mullvad.service" ];
     wantedBy = [ "multi-user.target" ];
 
-    path = [ pkgs.wireguard-tools pkgs.iproute2 pkgs.gawk ];
+    path = [ pkgs.wireguard-tools pkgs.iproute2 pkgs.gawk pkgs.nftables ];
 
     serviceConfig = {
       Type = "oneshot";
@@ -93,6 +94,28 @@ in
           # Split routing: non-web LAN traffic (fwmark 0x100) → Mullvad directly
           ip rule add fwmark 0x100 lookup 100 priority 100 2>/dev/null || true
           ip route replace default dev wg-mullvad table 100
+
+          # MSS clamp for the Mullvad tunnel. wg-mullvad's MTU is ~1420
+          # (1500 - WG overhead) but TCP endpoints have no way to learn that
+          # when ICMP Frag-Needed is filtered upstream — packets larger than
+          # ~1380 bytes silently blackhole until TCP eventually probes down.
+          # Symptom: "browser feels slow then self-heals after a few minutes."
+          # `set rt mtu` reads the route's actual MTU at SYN time, so this
+          # tracks any future Mullvad MTU changes automatically.
+          nft delete table inet mullvad-mss 2>/dev/null || true
+          nft -f - <<EOF
+          table inet mullvad-mss {
+            chain forward {
+              type filter hook forward priority mangle; policy accept;
+              oifname "wg-mullvad" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+              iifname "wg-mullvad" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+            }
+            chain output {
+              type filter hook output priority mangle; policy accept;
+              oifname "wg-mullvad" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+            }
+          }
+          EOF
           exit 0
         fi
         sleep 2
