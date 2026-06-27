@@ -102,20 +102,21 @@ in
           # Symptom: "browser feels slow then self-heals after a few minutes."
           # `set rt mtu` reads the route's actual MTU at SYN time, so this
           # tracks any future Mullvad MTU changes automatically.
+          # Discrete `nft add` commands (not heredoc) — heredoc here-docs
+          # break inside Nix '' strings when the closing EOF can't land at
+          # column 0 after common-indent stripping.
           nft delete table inet mullvad-mss 2>/dev/null || true
-          nft -f - <<EOF
-          table inet mullvad-mss {
-            chain forward {
-              type filter hook forward priority mangle; policy accept;
-              oifname "wg-mullvad" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
-              iifname "wg-mullvad" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
-            }
-            chain output {
-              type filter hook output priority mangle; policy accept;
-              oifname "wg-mullvad" tcp flags syn / syn,rst tcp option maxseg size set rt mtu
-            }
-          }
-          EOF
+          nft add table inet mullvad-mss
+          nft add chain inet mullvad-mss forward \
+            '{ type filter hook forward priority mangle; policy accept; }'
+          nft add rule inet mullvad-mss forward \
+            oifname '"wg-mullvad"' tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+          nft add rule inet mullvad-mss forward \
+            iifname '"wg-mullvad"' tcp flags syn / syn,rst tcp option maxseg size set rt mtu
+          nft add chain inet mullvad-mss output \
+            '{ type filter hook output priority mangle; policy accept; }'
+          nft add rule inet mullvad-mss output \
+            oifname '"wg-mullvad"' tcp flags syn / syn,rst tcp option maxseg size set rt mtu
           exit 0
         fi
         sleep 2
