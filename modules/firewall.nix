@@ -278,6 +278,7 @@ in
 
       # ── Split routing via fwmark ──────────────────────────────────────
       # LAN web (HTTP/HTTPS/QUIC) → WARP (in /run/netns/warp via veth)
+      #   …except WARP-excluded destinations (@warp_excluded_v4) → Mullvad
       # LAN everything else       → Mullvad
       # Host (locally-generated)  → Mullvad (unless marked otherwise)
       # Plex (skuid plex)         → bare wan0 (handled in ewin-firewall)
@@ -304,9 +305,27 @@ in
       # wg-mullvad/CloudflareWARP/veth-warp-h and stay unmarked so they
       # route normally back to the LAN client (conntrack handles return).
       table inet mangle {
+        # Destinations the WARP client refuses to tunnel (its split-tunnel
+        # exclusion list). If we mark these into warpns anyway, warp-svc
+        # hairpins them back over the veth still wearing the masqueraded
+        # source 10.99.1.1 — the host drops that as a martian (locally-
+        # owned source from the wire) and the traffic silently blackholes.
+        # Observed 2026-07-27: Apple TV → 17.188.x.x retry storm (Infuse),
+        # plus LAN clients hitting Cloudflare's WARP ingress range.
+        # Route them via Mullvad instead by skipping the web mark below.
+        set warp_excluded_v4 {
+          type ipv4_addr
+          flags interval
+          elements = {
+            17.0.0.0/8,           # Apple — WARP excludes it by default
+            162.159.192.0/21      # Cloudflare WARP ingress (loop prevention)
+          }
+        }
+
         chain prerouting {
           type filter hook prerouting priority mangle; policy accept;
           iifname "br-lan" meta mark set 0x100cf                            # LAN default → Mullvad
+          iifname "br-lan" ip daddr @warp_excluded_v4 counter return        # WARP-excluded → keep Mullvad
           iifname "br-lan" tcp dport { 80, 443 } meta mark set 0xc100       # LAN web    → warpns
           iifname "br-lan" udp dport 443 meta mark set 0xc100               # LAN QUIC   → warpns
         }
